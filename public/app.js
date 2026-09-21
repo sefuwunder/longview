@@ -53,6 +53,24 @@
     return s === "daily" ? "Daily" : s === "weekly" ? "Weekly" : "Manual";
   }
 
+  /* Per-class hints shown under the persisted crawl-failure banner. */
+  function errorHint(cls) {
+    switch (cls) {
+      case "challenge":
+        return "DuckDuckGo is showing a bot check to this network. Crawling may work later or from a different IP.";
+      case "timeout":
+        return "The request timed out. Check your connection and try again.";
+      case "network":
+        return "Could not reach DuckDuckGo. Check your connection and try again.";
+      case "parse_empty":
+        return "DuckDuckGo answered but no results could be read — the page format may have changed.";
+      default:
+        if (cls && cls.indexOf("http_") === 0)
+          return "DuckDuckGo returned an error (" + cls.slice(5) + "). Try again later.";
+        return "Try again later, or run Diagnose below to see which endpoint works from this network.";
+    }
+  }
+
   async function loadTopics() {
     var data = await api("/api/topics");
     var list = $("topic-list");
@@ -125,9 +143,19 @@
       $("detail-query").textContent = currentTopic.query;
       $("detail-sched").textContent = scheduleLabel(currentTopic.schedule);
       $("detail-last").textContent = "Last crawled: " + fmtTime(currentTopic.last_crawl_at);
-      $("detail-error").textContent = currentTopic.status === "error"
-        ? "Last crawl failed: " + (currentTopic.last_error || "unknown error")
-        : "";
+      var eb = $("detail-error");
+      if (currentTopic.status === "error") {
+        eb.classList.remove("hidden");
+        eb.innerHTML =
+          '<div class="err-banner"><strong>Crawl failed.</strong> ' +
+          esc(currentTopic.last_error || "unknown error") +
+          '<div class="hint">' + esc(errorHint(currentTopic.last_error_class)) + "</div></div>";
+      } else {
+        eb.classList.add("hidden");
+        eb.innerHTML = "";
+      }
+      $("diag-out").classList.add("hidden");
+      $("diag-out").innerHTML = "";
       await loadFindings(id);
     } catch (err) { notice(err.message, true); }
   }
@@ -187,6 +215,40 @@
       await loadTopics();
     } catch (err) { notice(err.message, true); }
     finally { btn.disabled = false; btn.textContent = "Re-crawl now"; }
+  });
+
+  $("btn-diag").addEventListener("click", async function () {
+    if (!currentTopic) return;
+    var btn = $("btn-diag");
+    var out = $("diag-out");
+    btn.disabled = true;
+    btn.textContent = "Probing…";
+    out.classList.remove("hidden");
+    out.innerHTML = '<div class="meta dim">Probing DuckDuckGo endpoints…</div>';
+    try {
+      var d = await api("/api/diag/crawl?q=" + encodeURIComponent(currentTopic.query));
+      var rows = d.endpoints.map(function (e) {
+        var win = e.endpoint === d.winner;
+        return "<tr" + (win ? ' class="winner"' : "") + ">" +
+          "<td>" + esc(e.endpoint) + (win ? ' <span class="badge new">works</span>' : "") + "</td>" +
+          "<td>" + (e.httpStatus == null ? "—" : esc(String(e.httpStatus))) + "</td>" +
+          "<td>" + esc(String(e.resultCount)) + "</td>" +
+          "<td>" + esc(e.errorClass || "ok") + "</td>" +
+          "<td>" + esc(String(e.ms)) + " ms</td></tr>";
+      }).join("");
+      out.innerHTML =
+        '<div class="diag-wrap"><table class="diag-table"><thead><tr>' +
+        "<th>Endpoint</th><th>HTTP</th><th>Results</th><th>Class</th><th>Time</th>" +
+        "</tr></thead><tbody>" + rows + "</tbody></table></div>" +
+        (d.winner
+          ? ""
+          : '<div class="meta dim" style="margin-top:0.4rem">None of the endpoints returned results from this network.</div>');
+    } catch (err) {
+      out.innerHTML = '<div class="err-line">' + esc(err.message) + "</div>";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Diagnose";
+    }
   });
 
   $("btn-delete-topic").addEventListener("click", async function () {

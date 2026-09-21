@@ -55,13 +55,15 @@
           <h2 id="detail-name"></h2>
           <div class="meta"><span id="detail-query" class="query"></span> <span id="detail-sched" class="badge"></span></div>
           <div class="meta dim" id="detail-last"></div>
-          <div class="meta dim" id="detail-error"></div>
+          <div id="detail-error" class="hidden"></div>
         </div>
         <div class="row">
           <button class="btn primary" id="btn-crawl">Re-crawl now</button>
+          <button class="btn" id="btn-diag" title="Probe each DuckDuckGo endpoint and show which one works from this network">Diagnose</button>
           <button class="btn danger" id="btn-delete-topic">Delete</button>
         </div>
       </div>
+      <div id="diag-out" class="hidden"></div>
       <div id="findings" class="findings"></div>
     </div>
   </section>

@@ -19,19 +19,45 @@ Bun + zero npm dependencies + built-in SQLite. Default port **3011**
 ## DuckDuckGo: the honest version
 
 There is **no official DuckDuckGo search API**. Longview crawls the public
-HTML endpoint (`https://html.duckduckgo.com/html/`) and parses result links
-with zero-dependency regex extraction (`src/ddg.ts`).
+HTML endpoints and parses result links with zero-dependency regex
+extraction (`src/ddg.ts`).
 
 Politeness policy (built in, not configurable down):
 - ≥2 seconds between requests, plus jitter
 - max ~20 results per query
-- exponential backoff on failures (1s / 2s / 4s, 3 attempts)
+- exponential backoff between endpoint attempts
 - a failed crawl marks the topic `error` and never kills the scheduler
 
-DuckDuckGo may serve bot-challenge pages to datacenter IPs; if a crawl
-returns no results unexpectedly, that is the likely cause. The crawl path is
-fully covered by fixture tests, so the parser is verified even where the
-live endpoint is not reachable.
+DuckDuckGo serves bot-challenge pages (`HTTP 202` + `anomaly-modal`) to
+some IPs — this is the most common reason crawling "doesn't work" from a
+given network. To cope, every crawl walks a **fallback chain**:
+
+1. `POST https://html.duckduckgo.com/html/`
+2. `GET https://html.duckduckgo.com/html/?q=<query>`
+3. `GET https://lite.duckduckgo.com/lite/?q=<query>` (simpler table markup)
+
+Each failure is **classified** and the reason is persisted on the topic
+(`last_error` + `last_error_class`), so the UI can show *why* instead of a
+bare "crawl error":
+
+| class | meaning |
+|---|---|
+| `challenge` | DDG served a bot check — retry later or from a different IP |
+| `timeout` | request timed out |
+| `network` | DNS / refused / reset |
+| `parse_empty` | HTTP 200 but zero results parsed — the page format may have changed |
+| `http_<code>` | any other non-200 status |
+
+The topic detail shows a failure banner with a per-class hint, and a
+**Diagnose** button next to "Re-crawl now" probes each endpoint in the
+chain and renders a per-endpoint table (HTTP status, result count, class,
+time) so you can see exactly which endpoint works from your network.
+
+`GET /api/diag/crawl?q=<query>` exposes the same probe as JSON:
+`{ok, query, endpoints: [{endpoint, httpStatus, resultCount, errorClass, ms}], winner}`.
+
+The crawl path is fully covered by fixture tests, so the parsers are
+verified even where the live endpoints are not reachable.
 
 ## Setup
 
@@ -54,7 +80,8 @@ Open http://127.0.0.1:3011. `DDG_BASE_URL` overrides the search endpoint
 | GET /api/topics/:id | one topic |
 | PATCH /api/topics/:id | `{name?, query?, schedule?}` |
 | DELETE /api/topics/:id | deletes topic + findings |
-| POST /api/topics/:id/crawl | manual trigger → `{added, total}`; 502 on crawl failure |
+| POST /api/topics/:id/crawl | manual trigger → `{added, total}`; 502 on crawl failure (with `error_class`) |
+| GET /api/diag/crawl?q=… | probe each DDG endpoint → `{endpoints, winner}` |
 | GET /api/topics/:id/findings | newest first |
 | POST /api/findings/:id/read | clears the "new" badge |
 | GET /api/research | run history |

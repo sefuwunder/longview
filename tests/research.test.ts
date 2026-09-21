@@ -85,10 +85,19 @@ describe("buildReport", () => {
 });
 
 describe("runResearchPipeline", () => {
-  const crawl = async () => [
+  const rows = [
     { title: "Page one", url: "https://x.test/1", snippet: "snip one" },
     { title: "Page two", url: "https://x.test/2", snippet: "snip two" },
   ];
+  const crawl = async () => ({
+    ok: true as const,
+    results: rows,
+    endpoint: "test",
+    httpStatus: 200 as const,
+    errorClass: null,
+    error: null,
+    ms: 1,
+  });
   const fetchPage = async (url: string) =>
     url.endsWith("/1")
       ? "Rivers flow downhill and eventually reach the sea after long journeys across the continent. " +
@@ -114,7 +123,16 @@ describe("runResearchPipeline", () => {
     let n = 0;
     const flaky = async () => {
       n++;
-      if (n === 1) throw new Error("boom");
+      if (n === 1)
+        return {
+          ok: false as const,
+          results: [] as typeof rows,
+          endpoint: "test",
+          httpStatus: 202 as const,
+          errorClass: "challenge" as const,
+          error: "bot challenge",
+          ms: 1,
+        };
       return crawl();
     };
     const { sources } = await runResearchPipeline("how do river deltas form?", {
@@ -128,9 +146,15 @@ describe("runResearchPipeline", () => {
   test("all queries failing throws", async () => {
     await expect(
       runResearchPipeline("q", {
-        crawl: async () => {
-          throw new Error("down");
-        },
+        crawl: async () => ({
+          ok: false as const,
+          results: [] as typeof rows,
+          endpoint: "test",
+          httpStatus: null,
+          errorClass: "network" as const,
+          error: "down",
+          ms: 1,
+        }),
         fetchPage,
       })
     ).rejects.toThrow("all search queries failed");

@@ -3,7 +3,7 @@
 // pages are fetched, and an EXTRACTIVE summary is built by scoring sentences
 // on keyword overlap with the question. The UI and README say this plainly.
 
-import type { DDGResult } from "./ddg";
+import type { DDGResult, CrawlResult } from "./ddg";
 import { crawlDDG } from "./ddg";
 
 const STOP = new Set(
@@ -183,7 +183,7 @@ export function buildReport(
 }
 
 export interface ResearchDeps {
-  crawl?: (q: string) => Promise<DDGResult[]>;
+  crawl?: (q: string) => Promise<CrawlResult>;
   fetchPage?: (url: string) => Promise<string>;
   maxPages?: number;
   maxQueries?: number;
@@ -207,10 +207,12 @@ export async function runResearchPipeline(
   let crawlOk = 0;
   for (const v of variants) {
     try {
-      const results = await crawl(v);
-      crawlOk++;
-      for (const r of results) {
-        if (!seen.has(r.url)) seen.set(r.url, r);
+      const r = await crawl(v);
+      if (r.ok && r.results.length > 0) {
+        crawlOk++;
+        for (const res of r.results) {
+          if (!seen.has(res.url)) seen.set(res.url, res);
+        }
       }
     } catch {
       // one dead query never kills the run

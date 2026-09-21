@@ -167,6 +167,47 @@ main { max-width: 1080px; width: 100%; margin: 0 auto; padding: 1.4rem; flex: 1;
 .linklike:hover { color: var(--txt); }
 .day-head { font-family: var(--font); color: var(--brass-soft); margin: 1.2rem 0 0.2rem; font-size: 1.05rem; }
 
+/* ---------- crawl-failure banner + diagnostics ---------- */
+#detail-error { width: 100%; }
+.err-banner {
+  background: #f3d9d3;
+  border: 1px solid var(--red);
+  color: #6e2a20;
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+  margin-top: 0.7rem;
+  font-size: 0.88rem;
+}
+.err-banner .hint { margin-top: 0.35rem; font-size: 0.82rem; opacity: 0.92; }
+.err-line { color: var(--red); font-size: 0.85rem; margin-top: 0.5rem; }
+#diag-out { width: 100%; margin-top: 0.6rem; }
+.diag-wrap { overflow-x: auto; }
+.diag-table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.diag-table th, .diag-table td {
+  text-align: left;
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.diag-table th {
+  color: var(--txt-dim);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.diag-table tbody tr:last-child td { border-bottom: none; }
+.diag-table tr.winner td { color: var(--green); }
+
 /* ---------- deep research ---------- */
 .research-grid { display: grid; grid-template-columns: 300px 1fr; gap: 1.2rem; align-items: start; }
 .run-list { display: flex; flex-direction: column; gap: 0.6rem; }

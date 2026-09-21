@@ -23,6 +23,7 @@ import {
   type Topic,
 } from "./db";
 import { crawlTopic, startScheduler } from "./scheduler";
+import { diagnoseDDG } from "./ddg";
 import { runResearchPipeline } from "./research";
 
 const PORT = Number(process.env.PORT ?? 3011);
@@ -53,6 +54,7 @@ function topicShape(db: Database, t: Topic) {
     schedule: t.schedule,
     status: t.status,
     last_error: t.last_error,
+    last_error_class: t.last_error_class,
     last_crawl_at: t.last_crawl_at,
     created_at: t.created_at,
     new_count: topicNewCount(db, t.id),
@@ -141,8 +143,23 @@ const server = Bun.serve({
         return json({ ok: true, added: r.added, total: r.total, topic: topicShape(db, t) });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        return json({ ok: false, error: msg }, 502);
+        const t = getTopic(db, id);
+        return json(
+          { ok: false, error: msg, error_class: t?.last_error_class ?? null },
+          502
+        );
       }
+    }
+
+    // ---- crawl diagnostics ----
+    // Probes each DDG endpoint in the fallback chain so a user can see exactly
+    // which one works from their network. Same localhost trust model as the
+    // rest of the app.
+    if (p === "/api/diag/crawl" && method === "GET") {
+      const q = String(url.searchParams.get("q") ?? "").trim();
+      if (!q) return json({ ok: false, error: "q query param is required" }, 400);
+      const d = await diagnoseDDG(q);
+      return json({ ok: true, ...d });
     }
 
     m = p.match(/^\/api\/topics\/(\d+)\/findings$/);

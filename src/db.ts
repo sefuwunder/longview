@@ -12,6 +12,7 @@ export interface Topic {
   schedule: string; // "daily" | "weekly" | "manual"
   status: string; // "ok" | "error"
   last_error: string | null;
+  last_error_class: string | null; // "challenge" | "timeout" | "network" | "parse_empty" | "http_<code>"
   last_crawl_at: number | null;
   created_at: number;
 }
@@ -59,6 +60,7 @@ export function openDb(dataDir?: string): Database {
       schedule TEXT NOT NULL DEFAULT 'daily',
       status TEXT NOT NULL DEFAULT 'ok',
       last_error TEXT,
+      last_error_class TEXT,
       last_crawl_at INTEGER,
       created_at INTEGER NOT NULL
     );
@@ -89,6 +91,11 @@ export function openDb(dataDir?: string): Database {
     );
     CREATE INDEX IF NOT EXISTS idx_sources_run ON research_sources(run_id);
   `);
+  // Migration for DBs created before last_error_class existed.
+  const cols = db.query("PRAGMA table_info(topics)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "last_error_class")) {
+    db.exec("ALTER TABLE topics ADD COLUMN last_error_class TEXT");
+  }
   return db;
 }
 
@@ -148,11 +155,12 @@ export function setTopicStatus(
   id: number,
   status: "ok" | "error",
   lastError: string | null,
-  lastCrawlAt: number | null
+  lastCrawlAt: number | null,
+  lastErrorClass: string | null = null
 ): void {
   db.query(
-    "UPDATE topics SET status=?, last_error=?, last_crawl_at=? WHERE id=?"
-  ).run(status, lastError, lastCrawlAt, id);
+    "UPDATE topics SET status=?, last_error=?, last_error_class=?, last_crawl_at=? WHERE id=?"
+  ).run(status, lastError, lastErrorClass, lastCrawlAt, id);
 }
 
 export function topicNewCount(db: Database, topicId: number): number {

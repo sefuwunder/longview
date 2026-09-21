@@ -1,6 +1,6 @@
 // In-process scheduler for longview: a sweep runs every 60s and re-crawls
 // topics whose schedule is due. One failing crawl marks that topic `error`
-// and never stops the sweep.
+// (with the classified reason persisted) and never stops the sweep.
 
 import type { Database } from "bun:sqlite";
 import {
@@ -10,7 +10,7 @@ import {
   setTopicStatus,
   type Topic,
 } from "./db";
-import { crawlDDG, type DDGResult } from "./ddg";
+import { crawlDDG, type CrawlResult } from "./ddg";
 
 export const SWEEP_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -27,7 +27,7 @@ export function topicIsDue(
   return nowMs - t.last_crawl_at >= interval;
 }
 
-export type CrawlFn = (query: string) => Promise<DDGResult[]>;
+export type CrawlFn = (query: string) => Promise<CrawlResult>;
 
 /** Crawl one topic, store new findings, update status. Returns added count. */
 export async function crawlTopic(
@@ -37,20 +37,40 @@ export async function crawlTopic(
 ): Promise<{ added: number; total: number }> {
   const topic = getTopic(db, topicId);
   if (!topic) throw new Error("topic not found");
+  let result: CrawlResult;
   try {
-    const results = await crawl(topic.query);
-    const added = insertFindings(
+    result = await crawl(topic.query);
+  } catch (e) {
+    // A crawl function that throws is treated as an unclassified network error.
+    const msg = e instanceof Error ? e.message : String(e);
+    result = {
+      ok: false,
+      results: [],
+      endpoint: null,
+      httpStatus: null,
+      errorClass: "network",
+      error: msg,
+      ms: 0,
+    };
+  }
+  if (!result.ok) {
+    setTopicStatus(
       db,
       topicId,
-      results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet }))
+      "error",
+      result.error,
+      topic.last_crawl_at,
+      result.errorClass
     );
-    setTopicStatus(db, topicId, "ok", null, Date.now());
-    return { added, total: results.length };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    setTopicStatus(db, topicId, "error", msg, topic.last_crawl_at);
-    throw new Error(`crawl failed: ${msg}`);
+    throw new Error(`crawl failed: ${result.error}`);
   }
+  const added = insertFindings(
+    db,
+    topicId,
+    result.results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet }))
+  );
+  setTopicStatus(db, topicId, "ok", null, Date.now(), null);
+  return { added, total: result.results.length };
 }
 
 /** One scheduler pass: crawl every due topic. Never throws. */

@@ -17,6 +17,31 @@ import {
   setTopicStatus,
 } from "../src/db";
 import { topicIsDue, crawlTopic, sweep } from "../src/scheduler";
+import type { CrawlResult } from "../src/ddg";
+
+const okCrawl =
+  (rows: { title: string; url: string; snippet: string }[]) =>
+  async (): Promise<CrawlResult> => ({
+    ok: true,
+    results: rows,
+    endpoint: "test",
+    httpStatus: 200,
+    errorClass: null,
+    error: null,
+    ms: 1,
+  });
+
+const failCrawl =
+  (errorClass: CrawlResult["errorClass"], error: string) =>
+  async (): Promise<CrawlResult> => ({
+    ok: false,
+    results: [],
+    endpoint: "test",
+    httpStatus: null,
+    errorClass,
+    error,
+    ms: 1,
+  });
 
 let db: Database;
 beforeEach(() => {
@@ -87,9 +112,11 @@ describe("findings dedupe", () => {
 describe("crawlTopic", () => {
   test("stores findings and marks ok", async () => {
     const t = createTopic(db, { name: "T", query: "q" });
-    const r = await crawlTopic(db, t.id, async () => [
-      { title: "A", url: "https://x.test/a", snippet: "sa" },
-    ]);
+    const r = await crawlTopic(
+      db,
+      t.id,
+      okCrawl([{ title: "A", url: "https://x.test/a", snippet: "sa" }])
+    );
     expect(r).toEqual({ added: 1, total: 1 });
     const cur = getTopic(db, t.id)!;
     expect(cur.status).toBe("ok");
@@ -109,6 +136,23 @@ describe("crawlTopic", () => {
     expect(cur.last_error).toContain("DDG down");
     expect(cur.last_crawl_at).toBe(12345);
   });
+  test("a classified crawl failure persists last_error + last_error_class", async () => {
+    const t = createTopic(db, { name: "T", query: "q" });
+    await expect(
+      crawlTopic(
+        db,
+        t.id,
+        failCrawl(
+          "challenge",
+          "DuckDuckGo served a bot challenge (HTTP 202) — try again later or from another network"
+        )
+      )
+    ).rejects.toThrow("crawl failed");
+    const cur = getTopic(db, t.id)!;
+    expect(cur.status).toBe("error");
+    expect(cur.last_error_class).toBe("challenge");
+    expect(cur.last_error).toContain("bot challenge");
+  });
 });
 
 describe("sweep", () => {
@@ -117,8 +161,17 @@ describe("sweep", () => {
     const due2 = createTopic(db, { name: "B", query: "qb" });
     createTopic(db, { name: "C", query: "qc", schedule: "manual" });
     const crawl = async (q: string) => {
-      if (q === "qb") throw new Error("nope");
-      return [{ title: "T-" + q, url: "https://x.test/" + q, snippet: "" }];
+      if (q === "qb")
+        return {
+          ok: false as const,
+          results: [] as never[],
+          endpoint: "test",
+          httpStatus: null,
+          errorClass: "network" as const,
+          error: "nope",
+          ms: 1,
+        };
+      return okCrawl([{ title: "T-" + q, url: "https://x.test/" + q, snippet: "" }])();
     };
     const r = await sweep(db, crawl);
     expect(r).toEqual({ crawled: 1, added: 1, errors: 1 });
@@ -130,7 +183,7 @@ describe("sweep", () => {
     let calls = 0;
     const r = await sweep(db, async () => {
       calls++;
-      return [];
+      return okCrawl([])();
     });
     expect(r.crawled).toBe(0);
     expect(calls).toBe(0);
