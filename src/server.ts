@@ -52,6 +52,7 @@ function topicShape(db: Database, t: Topic) {
     name: t.name,
     query: t.query,
     schedule: t.schedule,
+    depth: t.depth ?? 3,
     status: t.status,
     last_error: t.last_error,
     last_error_class: t.last_error_class,
@@ -59,6 +60,15 @@ function topicShape(db: Database, t: Topic) {
     created_at: t.created_at,
     new_count: topicNewCount(db, t.id),
   };
+}
+
+/** depth must be an integer 1-10 when supplied. */
+function parseDepth(b: Record<string, unknown>): { depth?: number; error?: string } {
+  if (b.depth === undefined || b.depth === null || b.depth === "") return {};
+  const n = typeof b.depth === "number" ? b.depth : Number(b.depth);
+  if (!Number.isInteger(n) || n < 1 || n > 10)
+    return { error: "depth must be an integer from 1 to 10" };
+  return { depth: n };
 }
 
 function serveStatic(path: string): Response | null {
@@ -103,7 +113,9 @@ const server = Bun.serve({
         return json({ ok: false, error: "name and query are required" }, 400);
       if (!["daily", "weekly", "manual"].includes(schedule))
         return json({ ok: false, error: "schedule must be daily, weekly or manual" }, 400);
-      const t = createTopic(db, { name, query, schedule });
+      const { depth, error: depthError } = parseDepth(b);
+      if (depthError) return json({ ok: false, error: depthError }, 400);
+      const t = createTopic(db, { name, query, schedule, depth });
       return json({ ok: true, topic: topicShape(db, t) }, 201);
     }
 
@@ -116,13 +128,18 @@ const server = Bun.serve({
       }
       if (method === "PATCH") {
         const b = await body(req);
-        const patch: { name?: string; query?: string; schedule?: string } = {};
+        const patch: { name?: string; query?: string; schedule?: string; depth?: number } = {};
         if (b.name !== undefined) patch.name = String(b.name).trim();
         if (b.query !== undefined) patch.query = String(b.query).trim();
         if (b.schedule !== undefined) {
           if (!["daily", "weekly", "manual"].includes(String(b.schedule)))
             return json({ ok: false, error: "schedule must be daily, weekly or manual" }, 400);
           patch.schedule = String(b.schedule);
+        }
+        if (b.depth !== undefined) {
+          const { depth, error: depthError } = parseDepth(b);
+          if (depthError) return json({ ok: false, error: depthError }, 400);
+          if (depth !== undefined) patch.depth = depth;
         }
         const t = updateTopic(db, id, patch);
         return t ? json({ ok: true, topic: topicShape(db, t) }) : json({ ok: false, error: "not found" }, 404);
@@ -140,7 +157,7 @@ const server = Bun.serve({
       try {
         const r = await crawlTopic(db, id);
         const t = getTopic(db, id)!;
-        return json({ ok: true, added: r.added, total: r.total, topic: topicShape(db, t) });
+        return json({ ok: true, added: r.added, total: r.total, discovered: r.discovered, topic: topicShape(db, t) });
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         const t = getTopic(db, id);
@@ -188,9 +205,14 @@ const server = Bun.serve({
       void (async () => {
         setRunStatus(db, run.id, "working");
         try {
-          const { report, sources } = await runResearchPipeline(question);
+          const { report, sources, stats } = await runResearchPipeline(question);
           insertResearchSources(db, run.id, sources);
-          setRunStatus(db, run.id, "done", report);
+          setRunStatus(db, run.id, "done", report, null, {
+            pagesCrawled: stats.pagesCrawled,
+            maxDepth: stats.maxDepthReached,
+            capped: stats.capped,
+            discovered: stats.discovered,
+          });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           setRunStatus(db, run.id, "error", null, msg);
@@ -212,6 +234,10 @@ const server = Bun.serve({
           report_md: run.report_md,
           error: run.error,
           created_at: run.created_at,
+          pages_crawled: run.pages_crawled,
+          max_depth_reached: run.max_depth,
+          capped: (run.capped ?? 0) === 1,
+          discovered: run.discovered ?? 0,
           sources: listResearchSources(db, run.id),
         },
       });

@@ -14,6 +14,7 @@ export interface Topic {
   last_error: string | null;
   last_error_class: string | null; // "challenge" | "timeout" | "network" | "parse_empty" | "http_<code>"
   last_crawl_at: number | null;
+  depth: number; // deep-crawl layers, 1-10
   created_at: number;
 }
 
@@ -25,6 +26,8 @@ export interface Finding {
   snippet: string;
   found_at: number;
   is_new: number;
+  depth: number; // 0 = DDG seed, >0 = discovered by deep crawl
+  via_url: string | null; // parent page URL for deep-crawl discoveries
 }
 
 export interface ResearchRun {
@@ -34,6 +37,10 @@ export interface ResearchRun {
   report_md: string | null;
   error: string | null;
   created_at: number;
+  pages_crawled: number | null;
+  max_depth: number | null;
+  capped: number | null;
+  discovered: number | null;
 }
 
 export interface ResearchSource {
@@ -91,11 +98,23 @@ export function openDb(dataDir?: string): Database {
     );
     CREATE INDEX IF NOT EXISTS idx_sources_run ON research_sources(run_id);
   `);
-  // Migration for DBs created before last_error_class existed.
-  const cols = db.query("PRAGMA table_info(topics)").all() as { name: string }[];
-  if (!cols.some((c) => c.name === "last_error_class")) {
-    db.exec("ALTER TABLE topics ADD COLUMN last_error_class TEXT");
-  }
+  // Migrations for DBs created before these columns existed.
+  const tableCols = (t: string) =>
+    (db.query(`PRAGMA table_info(${t})`).all() as { name: string }[]).map(
+      (c) => c.name
+    );
+  const addCol = (table: string, ddl: string) => {
+    const name = ddl.trim().split(/\s+/)[0];
+    if (!tableCols(table).includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  };
+  addCol("topics", "last_error_class TEXT");
+  addCol("topics", "depth INTEGER NOT NULL DEFAULT 3");
+  addCol("findings", "depth INTEGER NOT NULL DEFAULT 0");
+  addCol("findings", "via_url TEXT");
+  addCol("research_runs", "pages_crawled INTEGER");
+  addCol("research_runs", "max_depth INTEGER");
+  addCol("research_runs", "capped INTEGER NOT NULL DEFAULT 0");
+  addCol("research_runs", "discovered INTEGER NOT NULL DEFAULT 0");
   return db;
 }
 
@@ -113,32 +132,33 @@ export function getTopic(db: Database, id: number): Topic | null {
 
 export function createTopic(
   db: Database,
-  t: { name: string; query: string; schedule?: string }
+  t: { name: string; query: string; schedule?: string; depth?: number }
 ): Topic {
   const now = Date.now();
   const row = db
     .query(
-      "INSERT INTO topics (name, query, schedule, created_at) VALUES (?,?,?,?) RETURNING *"
+      "INSERT INTO topics (name, query, schedule, depth, created_at) VALUES (?,?,?,?,?) RETURNING *"
     )
-    .get(t.name, t.query, t.schedule ?? "daily", now) as Topic;
+    .get(t.name, t.query, t.schedule ?? "daily", t.depth ?? 3, now) as Topic;
   return row;
 }
 
 export function updateTopic(
   db: Database,
   id: number,
-  patch: { name?: string; query?: string; schedule?: string }
+  patch: { name?: string; query?: string; schedule?: string; depth?: number }
 ): Topic | null {
   const cur = getTopic(db, id);
   if (!cur) return null;
   const row = db
     .query(
-      "UPDATE topics SET name=?, query=?, schedule=? WHERE id=? RETURNING *"
+      "UPDATE topics SET name=?, query=?, schedule=?, depth=? WHERE id=? RETURNING *"
     )
     .get(
       patch.name ?? cur.name,
       patch.query ?? cur.query,
       patch.schedule ?? cur.schedule,
+      patch.depth ?? cur.depth,
       id
     ) as Topic;
   return row;
@@ -176,15 +196,29 @@ export function topicNewCount(db: Database, topicId: number): number {
 export function insertFindings(
   db: Database,
   topicId: number,
-  results: { title: string; url: string; snippet: string }[]
+  results: {
+    title: string;
+    url: string;
+    snippet: string;
+    depth?: number;
+    viaUrl?: string | null;
+  }[]
 ): number {
   const now = Date.now();
   const stmt = db.query(
-    "INSERT OR IGNORE INTO findings (topic_id, title, url, snippet, found_at, is_new) VALUES (?,?,?,?,?,1)"
+    "INSERT OR IGNORE INTO findings (topic_id, title, url, snippet, found_at, is_new, depth, via_url) VALUES (?,?,?,?,?,1,?,?)"
   );
   let added = 0;
   for (const r of results) {
-    const res = stmt.run(topicId, r.title, r.url, r.snippet, now);
+    const res = stmt.run(
+      topicId,
+      r.title,
+      r.url,
+      r.snippet,
+      now,
+      r.depth ?? 0,
+      r.viaUrl ?? null
+    );
     added += Number(res.changes);
   }
   return added;
@@ -226,17 +260,31 @@ export function listResearchRuns(db: Database): ResearchRun[] {
     .all() as ResearchRun[];
 }
 
+export interface RunStats {
+  pagesCrawled: number;
+  maxDepth: number;
+  capped: boolean;
+  discovered: number;
+}
+
 export function setRunStatus(
   db: Database,
   id: number,
   status: string,
   reportMd: string | null = null,
-  error: string | null = null
+  error: string | null = null,
+  stats: RunStats | null = null
 ): void {
-  db.query("UPDATE research_runs SET status=?, report_md=?, error=? WHERE id=?").run(
+  db.query(
+    "UPDATE research_runs SET status=?, report_md=?, error=?, pages_crawled=?, max_depth=?, capped=?, discovered=? WHERE id=?"
+  ).run(
     status,
     reportMd,
     error,
+    stats?.pagesCrawled ?? null,
+    stats?.maxDepth ?? null,
+    stats?.capped ? 1 : 0,
+    stats?.discovered ?? 0,
     id
   );
 }

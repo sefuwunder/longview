@@ -111,6 +111,7 @@
           name: $("topic-name").value,
           query: $("topic-query").value,
           schedule: $("topic-schedule").value,
+          depth: Number($("topic-depth").value),
         }),
       });
       $("topic-form").reset();
@@ -119,6 +120,22 @@
       notice("Topic added.");
     } catch (err) { notice(err.message, true); }
   });
+
+  function viaDomain(u) {
+    try { return new URL(u).hostname.replace(/^www\./, ""); }
+    catch (e) { return null; }
+  }
+
+  /* Depth badge (L2) + "via <domain>" provenance for deep-crawl findings. */
+  function provenance(f) {
+    var bits = "";
+    if (f.depth > 0) bits += '<span class="badge depth" title="Found ' + f.depth + ' link layer' + (f.depth === 1 ? "" : "s") + ' deep">L' + f.depth + "</span>";
+    if (f.via_url) {
+      var d = viaDomain(f.via_url);
+      if (d) bits += '<span class="via">via ' + esc(d) + "</span>";
+    }
+    return bits;
+  }
 
   function dayLabel(ms) {
     var d = new Date(ms);
@@ -143,6 +160,17 @@
       $("detail-query").textContent = currentTopic.query;
       $("detail-sched").textContent = scheduleLabel(currentTopic.schedule);
       $("detail-last").textContent = "Last crawled: " + fmtTime(currentTopic.last_crawl_at);
+      var dd = $("detail-depth");
+      if (dd.options.length === 0) {
+        for (var i = 1; i <= 10; i++) {
+          var opt = document.createElement("option");
+          opt.value = String(i);
+          opt.textContent = i + (i === 1 ? " layer" : " layers");
+          dd.appendChild(opt);
+        }
+      }
+      dd.value = String(currentTopic.depth || 3);
+      $("detail-depth-badge").textContent = "depth " + (currentTopic.depth || 3);
       var eb = $("detail-error");
       if (currentTopic.status === "error") {
         eb.classList.remove("hidden");
@@ -176,6 +204,7 @@
         '<div class="f-title"><a href="' + esc(f.url) + '" target="_blank" rel="noopener">' + esc(f.title) + "</a></div>" +
         (f.snippet ? '<div class="f-snip">' + esc(f.snippet) + "</div>" : "") +
         '<div class="f-foot"><span>' + esc(new Date(f.found_at).toLocaleTimeString()) + "</span>" +
+        provenance(f) +
         (f.is_new
           ? '<span class="badge new">new</span><button class="linklike" data-act="read">mark read</button>'
           : "<span>read</span>") +
@@ -210,7 +239,8 @@
     btn.textContent = "Crawling…";
     try {
       var data = await api("/api/topics/" + currentTopic.id + "/crawl", { method: "POST" });
-      notice("Crawl finished — " + data.added + " new of " + data.total + " results.");
+      notice("Crawl finished — " + data.added + " new of " + data.total + " pages" +
+        (data.discovered ? " (" + data.discovered + " discovered by deep crawl)" : "") + ".");
       await openTopic(currentTopic.id);
       await loadTopics();
     } catch (err) { notice(err.message, true); }
@@ -248,6 +278,24 @@
     } finally {
       btn.disabled = false;
       btn.textContent = "Diagnose";
+    }
+  });
+
+  /* Topic depth can be changed from the detail view; PATCHes the topic. */
+  $("detail-depth").addEventListener("change", async function () {
+    if (!currentTopic) return;
+    var n = Number($("detail-depth").value);
+    try {
+      var data = await api("/api/topics/" + currentTopic.id, {
+        method: "PATCH",
+        body: JSON.stringify({ depth: n }),
+      });
+      currentTopic = data.topic;
+      $("detail-depth-badge").textContent = "depth " + data.topic.depth;
+      notice("Crawl depth set to " + data.topic.depth + ".");
+    } catch (err) {
+      notice(err.message, true);
+      $("detail-depth").value = String(currentTopic.depth || 3);
     }
   });
 
@@ -324,7 +372,14 @@
       exp.href = "/api/research/" + id + "/export.md";
       exp.style.display = run.status === "done" ? "" : "none";
       if (run.status === "done") {
-        $("report-status").textContent = "Completed · " + run.sources.length + " sources";
+        var statBits = "Completed · " + run.sources.length + " sources";
+        if (run.pages_crawled) {
+          statBits += " · " + run.pages_crawled + " pages across " + run.max_depth_reached + " layer" +
+            (run.max_depth_reached === 1 ? "" : "s");
+          if (run.discovered) statBits += " · " + run.discovered + " discovered by deep crawl";
+          if (run.capped) statBits += " (stopped at safety cap)";
+        }
+        $("report-status").textContent = statBits;
         $("report-body").innerHTML = renderReport(run.report_md || "");
         $("report-sources").innerHTML =
           '<div class="sources"><h4>Sources</h4><ol>' +

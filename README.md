@@ -8,7 +8,8 @@ A self-hosted, long-term online research tool. Two modes in one dashboard:
    marked read. Findings dedupe by URL per topic.
 2. **Deep research** — ask a question; Longview generates 3–5 query variants,
    crawls each, fetches the top pages' text (up to 8 pages, 10s timeout each),
-   and compiles an **extractive** summary: top sentences by keyword overlap,
+   then follows relevant links **up to 10 layers deep** (see below) and
+   compiles an **extractive** summary: top sentences by keyword overlap,
    quoted verbatim from the sources. **No LLM is involved** — the report is
    ranked quotes, not generated prose. The report renders with a Sources
    section and exports as Markdown.
@@ -59,6 +60,34 @@ time) so you can see exactly which endpoint works from your network.
 The crawl path is fully covered by fixture tests, so the parsers are
 verified even where the live endpoints are not reachable.
 
+## Deep crawl — keyword-guided link following
+
+Beyond the search results, Longview follows outbound links breadth-first
+(`src/deepcrawl.ts`), up to 10 layers deep. Every candidate link is scored
+by keyword overlap between the search query and its anchor text + URL
+tokens; only links with at least one keyword hit are followed, top 5 per
+page. That gating is what keeps a 10-layer crawl from wandering off across
+the web.
+
+- **Watched topics** have a `depth` setting (1–10, default 3), editable in
+  the create form and the topic detail view. Findings store `depth`
+  (0 = DDG seed) and `via_url` provenance; the UI shows an `L2` badge and
+  "via \<domain\>". Dedupe by URL still applies — a known page is not
+  re-added, but its links are still followed.
+- **Deep research** always crawls to depth 10. Discovered pages join the
+  source pool for the extractive summary; the report notes how many pages
+  were read, how many layers were reached, and how many new sources the
+  deep crawl found. The run detail JSON carries `pages_crawled`,
+  `max_depth_reached`, `capped`, and `discovered`.
+
+Safety caps (per run): 150 pages, 10 minutes wall-clock — whichever hits
+first stops the crawl cleanly and reports `capped`. Per-domain politeness
+(≥2s between requests), 10s fetch timeouts, 2MB body cap, non-HTML
+skipped, cycle-proof URL normalization (fragment / trailing slash /
+tracking params stripped).
+
+Tuning env: `DEEP_NO_DELAY=1` skips politeness delays (tests only).
+
 ## Setup
 
 ```sh
@@ -76,17 +105,17 @@ Open http://127.0.0.1:3011. `DDG_BASE_URL` overrides the search endpoint
 | Method | Path | Notes |
 |---|---|---|
 | GET /api/topics | list topics (with `new_count`) |
-| POST /api/topics | `{name, query, schedule}` → 201 |
+| POST /api/topics | `{name, query, schedule, depth?}` → 201 (`depth` 1–10, default 3) |
 | GET /api/topics/:id | one topic |
-| PATCH /api/topics/:id | `{name?, query?, schedule?}` |
+| PATCH /api/topics/:id | `{name?, query?, schedule?, depth?}` |
 | DELETE /api/topics/:id | deletes topic + findings |
-| POST /api/topics/:id/crawl | manual trigger → `{added, total}`; 502 on crawl failure (with `error_class`) |
+| POST /api/topics/:id/crawl | manual trigger → `{added, total, discovered}`; 502 on crawl failure (with `error_class`) |
 | GET /api/diag/crawl?q=… | probe each DDG endpoint → `{endpoints, winner}` |
 | GET /api/topics/:id/findings | newest first |
 | POST /api/findings/:id/read | clears the "new" badge |
 | GET /api/research | run history |
 | POST /api/research | `{question}` → 202 `{run_id}`; runs async, poll below |
-| GET /api/research/:id | `{status, report_md, sources, error}` |
+| GET /api/research/:id | `{status, report_md, sources, error, pages_crawled, max_depth_reached, capped, discovered}` |
 | GET /api/research/:id/export.md | markdown download (409 until done) |
 
 ## Tests

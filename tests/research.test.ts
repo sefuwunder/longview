@@ -106,17 +106,25 @@ describe("runResearchPipeline", () => {
       : "Tides are caused by the moon pulling on the oceans of the earth twice each day. " +
         "River deltas form where the water slows down and drops its sediment load near the coast. " +
         "Coastal wetlands around deltas support rich ecosystems and important fisheries worldwide.";
+  // Link-free HTML so the real deepCrawl path runs deterministically in-process.
+  const fetchHtml = async () =>
+    "<html><head><title>T</title></head><body><p>plain paragraph, no links here</p></body></html>";
 
   test("full pipeline with stubs", async () => {
-    const { report, sources } = await runResearchPipeline("how do river deltas form?", {
+    const { report, sources, stats } = await runResearchPipeline("how do river deltas form?", {
       crawl,
       fetchPage,
+      fetchHtml,
       maxQueries: 1,
     });
     expect(sources.length).toBe(2);
     expect(report).toContain("## Key points");
     expect(report).toContain("## Sources");
     expect(report).toContain("deltas form");
+    expect(report).toContain("Deep crawl:");
+    expect(stats.pagesCrawled).toBe(2);
+    expect(stats.discovered).toBe(0);
+    expect(stats.capped).toBe(false);
   });
 
   test("one failing query does not kill the run", async () => {
@@ -138,6 +146,7 @@ describe("runResearchPipeline", () => {
     const { sources } = await runResearchPipeline("how do river deltas form?", {
       crawl: flaky,
       fetchPage,
+      fetchHtml,
       maxQueries: 2,
     });
     expect(sources.length).toBe(2);
@@ -164,10 +173,56 @@ describe("runResearchPipeline", () => {
     await expect(
       runResearchPipeline("q", {
         crawl,
+        fetchHtml,
         fetchPage: async () => {
           throw new Error("404");
         },
       })
     ).rejects.toThrow("no pages could be fetched");
+  });
+
+  test("discovered pages join the source pool + stats", async () => {
+    const deep = async () => ({
+      pages: [
+        {
+          title: "Delta deep dive",
+          url: "https://x.test/deep",
+          snippet: "deep snip",
+          depth: 1,
+          viaUrl: "https://x.test/1",
+          text:
+            "River deltas form where the water slows down and drops its sediment load near the coast, " +
+            "creating rich wetlands. Deltas like the Mississippi shift course over centuries of deposition. " +
+            "Engineers study delta formation to predict how river deltas evolve under changing climates.",
+        },
+      ],
+      pagesCrawled: 3,
+      maxDepthReached: 1,
+      capped: false,
+      capReason: null as null,
+    });
+    const { report, sources, stats } = await runResearchPipeline(
+      "how do river deltas form?",
+      { crawl, fetchPage, deep, maxQueries: 1 }
+    );
+    expect(stats.discovered).toBe(1);
+    expect(stats.pagesCrawled).toBe(3);
+    expect(stats.maxDepthReached).toBe(1);
+    expect(sources.some((s) => s.url === "https://x.test/deep")).toBe(true);
+    expect(report).toContain("1 new source discovered beyond the search results");
+  });
+
+  test("a throwing deep crawl still summarizes the seeds", async () => {
+    const deep = async (): Promise<never> => {
+      throw new Error("deep down");
+    };
+    const { sources, stats } = await runResearchPipeline("how do river deltas form?", {
+      crawl,
+      fetchPage,
+      deep,
+      maxQueries: 1,
+    });
+    expect(sources.length).toBe(2);
+    expect(stats.discovered).toBe(0);
   });
 });

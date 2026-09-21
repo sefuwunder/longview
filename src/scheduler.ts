@@ -11,6 +11,13 @@ import {
   type Topic,
 } from "./db";
 import { crawlDDG, type CrawlResult } from "./ddg";
+import {
+  deepCrawl,
+  normalizeUrl,
+  type DeepCrawlOptions,
+  type DeepCrawlResult,
+  type DeepSeed,
+} from "./deepcrawl";
 
 export const SWEEP_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -28,13 +35,33 @@ export function topicIsDue(
 }
 
 export type CrawlFn = (query: string) => Promise<CrawlResult>;
+export type DeepCrawlFn = (
+  seeds: DeepSeed[],
+  query: string,
+  maxDepth: number,
+  opts?: DeepCrawlOptions
+) => Promise<DeepCrawlResult>;
 
-/** Crawl one topic, store new findings, update status. Returns added count. */
+const defaultDeep: DeepCrawlFn = (seeds, query, maxDepth, opts) =>
+  deepCrawl(seeds, query, { ...opts, maxDepth });
+
+export interface CrawlTopicDeps {
+  crawl?: CrawlFn;
+  deep?: DeepCrawlFn;
+}
+
+/**
+ * Crawl one topic: DDG seeds first, then a keyword-guided deep crawl to the
+ * topic's depth. New pages (seeds + discoveries) are stored as findings;
+ * dedupe by URL still applies. Returns added count. Never throws for deep-
+ * crawl failures — the DDG seeds are the guaranteed minimum.
+ */
 export async function crawlTopic(
   db: Database,
   topicId: number,
-  crawl: CrawlFn = crawlDDG
-): Promise<{ added: number; total: number }> {
+  crawl: CrawlFn = crawlDDG,
+  deep: DeepCrawlFn = defaultDeep
+): Promise<{ added: number; total: number; discovered: number }> {
   const topic = getTopic(db, topicId);
   if (!topic) throw new Error("topic not found");
   let result: CrawlResult;
@@ -64,19 +91,48 @@ export async function crawlTopic(
     );
     throw new Error(`crawl failed: ${result.error}`);
   }
-  const added = insertFindings(
-    db,
-    topicId,
-    result.results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet }))
-  );
+  const depth = topic.depth && topic.depth >= 1 && topic.depth <= 10 ? topic.depth : 3;
+  // Seeds are always stored, even if the deep crawler can't fetch them.
+  const seedRows = result.results.map((r) => ({
+    title: r.title,
+    url: normalizeUrl(r.url) ?? r.url,
+    snippet: r.snippet,
+    depth: 0,
+    viaUrl: null as string | null,
+  }));
+  let discoveredRows: typeof seedRows = [];
+  try {
+    const dc = await deep(deepSeedList(result.results), topic.query, depth);
+    discoveredRows = dc.pages
+      .filter((p) => p.depth > 0)
+      .map((p) => ({
+        title: p.title,
+        url: p.url,
+        snippet: p.snippet,
+        depth: p.depth,
+        viaUrl: p.viaUrl,
+      }));
+  } catch {
+    // deep crawl failure never fails the topic; seeds still get stored
+  }
+  const added = insertFindings(db, topicId, [...seedRows, ...discoveredRows]);
   setTopicStatus(db, topicId, "ok", null, Date.now(), null);
-  return { added, total: result.results.length };
+  return {
+    added,
+    total: seedRows.length + discoveredRows.length,
+    discovered: discoveredRows.length,
+  };
+}
+
+function deepSeedList(results: CrawlResult["results"]): DeepSeed[] {
+  return results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet }));
 }
 
 /** One scheduler pass: crawl every due topic. Never throws. */
 export async function sweep(
   db: Database,
-  crawl: CrawlFn = crawlDDG
+  crawl: CrawlFn = crawlDDG,
+  deep: DeepCrawlFn = defaultDeep
 ): Promise<{ crawled: number; added: number; errors: number }> {
   const now = Date.now();
   const due = listTopics(db).filter((t) => topicIsDue(t, now));
@@ -85,7 +141,7 @@ export async function sweep(
     errors = 0;
   for (const t of due) {
     try {
-      const r = await crawlTopic(db, t.id, crawl);
+      const r = await crawlTopic(db, t.id, crawl, deep);
       crawled++;
       added += r.added;
     } catch {

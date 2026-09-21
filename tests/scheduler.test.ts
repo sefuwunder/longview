@@ -18,6 +18,16 @@ import {
 } from "../src/db";
 import { topicIsDue, crawlTopic, sweep } from "../src/scheduler";
 import type { CrawlResult } from "../src/ddg";
+import type { DeepCrawlResult } from "../src/deepcrawl";
+
+/** Deep-crawl stub that discovers nothing (deterministic, no network). */
+const noDeep = async (): Promise<DeepCrawlResult> => ({
+  pages: [],
+  pagesCrawled: 0,
+  maxDepthReached: 0,
+  capped: false,
+  capReason: null,
+});
 
 const okCrawl =
   (rows: { title: string; url: string; snippet: string }[]) =>
@@ -115,13 +125,17 @@ describe("crawlTopic", () => {
     const r = await crawlTopic(
       db,
       t.id,
-      okCrawl([{ title: "A", url: "https://x.test/a", snippet: "sa" }])
+      okCrawl([{ title: "A", url: "https://x.test/a", snippet: "sa" }]),
+      noDeep
     );
-    expect(r).toEqual({ added: 1, total: 1 });
+    expect(r).toEqual({ added: 1, total: 1, discovered: 0 });
     const cur = getTopic(db, t.id)!;
     expect(cur.status).toBe("ok");
     expect(cur.last_crawl_at).not.toBeNull();
-    expect(listFindings(db, t.id).length).toBe(1);
+    const f = listFindings(db, t.id);
+    expect(f.length).toBe(1);
+    expect(f[0].depth).toBe(0);
+    expect(f[0].via_url).toBeNull();
   });
   test("a failed crawl marks the topic error and keeps old last_crawl_at", async () => {
     const t = createTopic(db, { name: "T", query: "q" });
@@ -173,7 +187,7 @@ describe("sweep", () => {
         };
       return okCrawl([{ title: "T-" + q, url: "https://x.test/" + q, snippet: "" }])();
     };
-    const r = await sweep(db, crawl);
+    const r = await sweep(db, crawl, noDeep);
     expect(r).toEqual({ crawled: 1, added: 1, errors: 1 });
     expect(listFindings(db, due1.id).length).toBe(1);
     expect(listFindings(db, due2.id).length).toBe(0);
@@ -181,12 +195,111 @@ describe("sweep", () => {
   });
   test("nothing due → nothing crawled", async () => {
     let calls = 0;
-    const r = await sweep(db, async () => {
-      calls++;
-      return okCrawl([])();
-    });
+    const r = await sweep(
+      db,
+      async () => {
+        calls++;
+        return okCrawl([])();
+      },
+      noDeep
+    );
     expect(r.crawled).toBe(0);
     expect(calls).toBe(0);
+  });
+});
+
+describe("crawlTopic deep crawl", () => {
+  const deepPages = (maxDepthSeen: { n: number }) => async (
+    seeds: { title: string; url: string; snippet: string }[],
+    query: string,
+    maxDepth: number
+  ): Promise<DeepCrawlResult> => {
+    maxDepthSeen.n = maxDepth;
+    void query;
+    return {
+      pages: seeds.map((s) => ({
+        title: s.title,
+        url: s.url,
+        snippet: s.snippet,
+        depth: 0,
+        viaUrl: null,
+        text: "seed text",
+      })),
+      pagesCrawled: seeds.length,
+      maxDepthReached: 0,
+      capped: false,
+      capReason: null,
+    };
+  };
+
+  test("topic depth is passed to the deep crawler", async () => {
+    const t = createTopic(db, { name: "T", query: "q", depth: 7 });
+    const seen = { n: 0 };
+    await crawlTopic(
+      db,
+      t.id,
+      okCrawl([{ title: "A", url: "https://x.test/a", snippet: "" }]),
+      deepPages(seen)
+    );
+    expect(seen.n).toBe(7);
+    expect(getTopic(db, t.id)!.depth).toBe(7);
+  });
+
+  test("discoveries stored with depth + via_url; dedupe keeps them stable", async () => {
+    const t = createTopic(db, { name: "T", query: "q", depth: 2 });
+    const deep = async (): Promise<DeepCrawlResult> => ({
+      pages: [
+        {
+          title: "Deep one",
+          url: "https://x.test/deep1",
+          snippet: "d1",
+          depth: 1,
+          viaUrl: "https://x.test/seed",
+          text: "x".repeat(300),
+        },
+        {
+          title: "Deep two",
+          url: "https://x.test/deep2",
+          snippet: "d2",
+          depth: 2,
+          viaUrl: "https://x.test/deep1",
+          text: "y".repeat(300),
+        },
+      ],
+      pagesCrawled: 3,
+      maxDepthReached: 2,
+      capped: false,
+      capReason: null,
+    });
+    const crawl = okCrawl([{ title: "Seed", url: "https://x.test/seed", snippet: "" }]);
+    const r1 = await crawlTopic(db, t.id, crawl, deep);
+    expect(r1).toEqual({ added: 3, total: 3, discovered: 2 });
+    const byUrl = Object.fromEntries(
+      listFindings(db, t.id).map((f) => [f.url, f])
+    );
+    expect(byUrl["https://x.test/deep1"].depth).toBe(1);
+    expect(byUrl["https://x.test/deep1"].via_url).toBe("https://x.test/seed");
+    expect(byUrl["https://x.test/deep2"].depth).toBe(2);
+    expect(byUrl["https://x.test/deep2"].via_url).toBe("https://x.test/deep1");
+    // re-crawl: dedupe adds nothing
+    const r2 = await crawlTopic(db, t.id, crawl, deep);
+    expect(r2.added).toBe(0);
+    expect(listFindings(db, t.id).length).toBe(3);
+  });
+
+  test("a throwing deep crawl still stores the seeds", async () => {
+    const t = createTopic(db, { name: "T", query: "q" });
+    const boom = async (): Promise<DeepCrawlResult> => {
+      throw new Error("deep down");
+    };
+    const r = await crawlTopic(
+      db,
+      t.id,
+      okCrawl([{ title: "A", url: "https://x.test/a", snippet: "" }]),
+      boom
+    );
+    expect(r.added).toBe(1);
+    expect(getTopic(db, t.id)!.status).toBe("ok");
   });
 });
 

@@ -5,6 +5,12 @@
 
 import type { DDGResult, CrawlResult } from "./ddg";
 import { crawlDDG } from "./ddg";
+import {
+  deepCrawl,
+  normalizeUrl,
+  type DeepCrawlResult,
+  type DeepSeed,
+} from "./deepcrawl";
 
 const STOP = new Set(
   "a,an,the,and,or,but,of,to,in,on,for,with,at,by,from,as,is,are,was,were,be,been,being,it,its,this,that,these,those,i,you,he,she,we,they,them,his,her,our,your,their,what,which,who,whom,how,when,where,why,do,does,did,can,could,should,would,will,just,not,no,yes,if,then,than,so,such,into,over,after,before,between,about,up,out,more,most,other,some,any,all,only,very,than,too".split(
@@ -159,15 +165,16 @@ export function extractiveSummary(
 export function buildReport(
   question: string,
   sentences: string[],
-  sources: { title: string; url: string }[]
+  sources: { title: string; url: string }[],
+  crawlNote?: string
 ): string {
   const lines: string[] = [`# ${question.trim()}`, ""];
   lines.push(
     "_Extractive summary — sentences pulled verbatim from the sources below, ranked by keyword overlap. No AI generation._",
-    "",
-    "## Key points",
     ""
   );
+  if (crawlNote) lines.push(`_${crawlNote}_`, "");
+  lines.push("## Key points", "");
   if (sentences.length === 0) {
     lines.push("_No usable sentences were extracted from the fetched pages._", "");
   } else {
@@ -185,22 +192,51 @@ export function buildReport(
 export interface ResearchDeps {
   crawl?: (q: string) => Promise<CrawlResult>;
   fetchPage?: (url: string) => Promise<string>;
+  /** Raw HTML fetcher for the deep crawler (defaults to the real one). */
+  fetchHtml?: (url: string) => Promise<string>;
+  /** Deep-crawl override (tests). */
+  deep?: (
+    seeds: DeepSeed[],
+    query: string,
+    maxDepth: number
+  ) => Promise<DeepCrawlResult>;
   maxPages?: number;
   maxQueries?: number;
+  /** Deep-crawl layers for this run. Default 10. */
+  maxDepth?: number;
+}
+
+export interface ResearchStats {
+  pagesCrawled: number;
+  maxDepthReached: number;
+  capped: boolean;
+  discovered: number;
 }
 
 /**
- * Run the full deep-research pipeline. Returns report markdown + sources.
- * Failures of individual crawls/pages are tolerated; a total failure throws.
+ * Run the full deep-research pipeline: DDG query variants, seed pages, then
+ * a keyword-guided deep crawl (default 10 layers). Discovered pages join the
+ * source pool for the extractive summary. Returns report markdown + sources
+ * + crawl stats. Failures of individual crawls/pages are tolerated; a total
+ * failure throws.
  */
 export async function runResearchPipeline(
   question: string,
   deps: ResearchDeps = {}
-): Promise<{ report: string; sources: { title: string; url: string; snippet: string }[] }> {
+): Promise<{
+  report: string;
+  sources: { title: string; url: string; snippet: string }[];
+  stats: ResearchStats;
+}> {
   const crawl = deps.crawl ?? ((q: string) => crawlDDG(q));
   const fetchPage = deps.fetchPage ?? fetchPageText;
   const maxPages = deps.maxPages ?? 8;
   const maxQueries = deps.maxQueries ?? 5;
+  const maxDepth = deps.maxDepth ?? 10;
+  const doDeep =
+    deps.deep ??
+    ((seeds: DeepSeed[], q: string, md: number) =>
+      deepCrawl(seeds, q, { maxDepth: md, fetchHtml: deps.fetchHtml }));
 
   const variants = queryVariants(question).slice(0, maxQueries);
   const seen = new Map<string, DDGResult>();
@@ -232,7 +268,46 @@ export async function runResearchPipeline(
   }
   if (pages.length === 0) throw new Error("no pages could be fetched");
 
-  const sentences = extractiveSummary(pages, question, 8);
-  const report = buildReport(question, sentences, pages);
-  return { report, sources: pages.map((p) => ({ title: p.title, url: p.url, snippet: p.snippet })) };
+  // Keyword-guided deep crawl from the seed results; discoveries join the pool.
+  let dc: DeepCrawlResult | null = null;
+  try {
+    dc = await doDeep(
+      candidates.map((c) => ({ title: c.title, url: c.url, snippet: c.snippet })),
+      question,
+      maxDepth
+    );
+  } catch {
+    // a dead deep crawl never kills the run; seeds still summarize
+  }
+  const discovered: ScoredPage[] = (dc?.pages ?? [])
+    .filter((p) => p.depth > 0 && p.text.length > 200)
+    .map((p) => ({ title: p.title, url: p.url, snippet: p.snippet, text: p.text }));
+  const allPages = [...pages, ...discovered];
+
+  const sentences = extractiveSummary(allPages, question, 8);
+  const stats: ResearchStats = {
+    pagesCrawled: dc?.pagesCrawled ?? 0,
+    maxDepthReached: dc?.maxDepthReached ?? 0,
+    capped: dc?.capped ?? false,
+    discovered: discovered.length,
+  };
+  const crawlNote =
+    `Deep crawl: ${stats.pagesCrawled} pages read across ${stats.maxDepthReached} ` +
+    `layer${stats.maxDepthReached === 1 ? "" : "s"}` +
+    (stats.discovered > 0
+      ? `, ${stats.discovered} new source${stats.discovered === 1 ? "" : "s"} discovered beyond the search results`
+      : ", no new sources beyond the search results") +
+    (stats.capped ? " (stopped at the safety cap)" : "") +
+    ".";
+  // Dedupe sources by normalized URL: a discovered page may be the same
+  // document as a seed under a trivially different URL.
+  const srcMap = new Map<string, { title: string; url: string; snippet: string }>();
+  for (const p of allPages) {
+    const k = normalizeUrl(p.url) ?? p.url;
+    if (!srcMap.has(k))
+      srcMap.set(k, { title: p.title, url: p.url, snippet: p.snippet });
+  }
+  const sources = [...srcMap.values()];
+  const report = buildReport(question, sentences, sources, crawlNote);
+  return { report, sources, stats };
 }

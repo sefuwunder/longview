@@ -127,6 +127,15 @@ main { max-width: 1080px; width: 100%; margin: 0 auto; padding: 1.4rem; flex: 1;
 .card .badge { border-color: #b3a888; color: var(--inktxt-dim); }
 .card .badge.new { border-color: #4d7a3d; color: #3d6a30; }
 .card .badge.err { border-color: #a03e30; color: #a03e30; }
+.badge.depth { border-color: var(--brass); color: var(--brass-soft); }
+.card .badge.depth { border-color: #8a6f16; color: #7a6110; }
+.via { font-style: italic; }
+.depth-edit { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--inktxt-dim); }
+.depth-edit select {
+  width: auto; margin: 0; padding: 0.3rem 0.5rem; font-size: 0.85rem;
+  display: inline-block; border: 1px solid #b3a888; border-radius: 6px;
+  background: #fbf6e9; color: var(--inktxt);
+}
 
 /* ---------- topic list ---------- */
 .topic-list { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
