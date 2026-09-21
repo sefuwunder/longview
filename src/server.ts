@@ -303,7 +303,28 @@ const server = Bun.serve({
 });
 
 const stopScheduler = startScheduler(db);
-process.on("SIGINT", () => stopScheduler());
-process.on("SIGTERM", () => stopScheduler());
+
+/**
+ * Graceful shutdown. Registering SIGINT/SIGTERM listeners replaces the
+ * runtime's default terminate behavior, so we must exit explicitly —
+ * stopping the scheduler alone leaves the HTTP server keeping the event
+ * loop alive (Ctrl-C appeared to do nothing). A second signal forces an
+ * immediate exit in case shutdown hangs (e.g. a crawl in flight).
+ */
+let shuttingDown = false;
+function shutdown(signal: string): void {
+  if (shuttingDown) {
+    console.log(`[longview] ${signal} again — forcing exit`);
+    process.exit(1);
+  }
+  shuttingDown = true;
+  console.log(`[longview] ${signal} received — shutting down`);
+  stopScheduler();
+  server.stop();
+  db.close();
+  process.exit(0);
+}
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 console.log(`[longview] listening on http://127.0.0.1:${server.port}`);
