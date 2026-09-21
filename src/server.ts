@@ -106,7 +106,7 @@ const server = Bun.serve({
     // ---- static ----
     if (method === "GET" && (p === "/" || p === "/index.html"))
       return serveStatic("index.html")!;
-    if (method === "GET" && (p === "/styles.css" || p === "/app.js"))
+    if (method === "GET" && (p === "/styles.css" || p === "/app.js" || p === "/canvas.js"))
       return serveStatic(p.slice(1))!;
 
     // ---- topics ----
