@@ -17,6 +17,7 @@
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button class="tab on" data-tab="topics" role="tab" aria-selected="true">Topics</button>
     <button class="tab" data-tab="research" role="tab" aria-selected="false">Deep research</button>
+    <button class="tab" data-tab="settings" role="tab" aria-selected="false">Settings</button>
   </nav>
 </header>
 
@@ -61,7 +62,7 @@
     </form>
 
     <div id="topic-list" class="topic-list"></div>
-    <div id="topic-empty" class="empty hidden">No topics yet. Add one above and Longview will crawl DuckDuckGo for it on schedule.</div>
+    <div id="topic-empty" class="empty hidden">No topics yet. Add one above and Longview will crawl it on schedule with the active backend.</div>
 
     <div id="topic-detail" class="hidden">
       <button class="btn ghost back" id="btn-back-topics">&larr; All topics</button>
@@ -79,7 +80,7 @@
         </div>
         <div class="row">
           <button class="btn primary" id="btn-crawl">Re-crawl now</button>
-          <button class="btn" id="btn-diag" title="Probe each DuckDuckGo endpoint and show which one works from this network">Diagnose</button>
+          <button class="btn" id="btn-diag" title="Probe the active search backend and show what works from this network">Diagnose</button>
           <button class="btn danger" id="btn-delete-topic">Delete</button>
         </div>
       </div>
@@ -99,7 +100,7 @@
         <input id="research-q" maxlength="300" placeholder="e.g. How do solid-state batteries work?" required>
       </label>
       <button type="submit" class="btn primary">Run research</button>
-      <p class="meta dim">Generates 3–5 query variants, crawls DuckDuckGo, fetches up to 8 pages, follows relevant links up to 10 layers deep, and compiles quoted sentences into a report.</p>
+      <p class="meta dim">Generates 3–5 query variants, crawls the active search backend, fetches up to 8 pages, follows relevant links up to 10 layers deep, and compiles quoted sentences into a report.</p>
     </form>
     <div class="research-grid">
       <div>
@@ -117,10 +118,43 @@
       </div>
     </div>
   </section>
+  <!-- ================= SETTINGS ================= -->
+  <section id="tab-settings" class="panel hidden" role="tabpanel">
+    <div class="toolbar">
+      <h2>Settings</h2>
+    </div>
+    <div class="card">
+      <h3>Search backend</h3>
+      <p class="meta dim">Which service provides the initial search results. The deep crawl that follows links works the same either way.</p>
+      <div class="backend-list" id="backend-list">
+        <label class="backend-card">
+          <input type="radio" name="backend" value="ddg">
+          <span>
+            <strong>DuckDuckGo</strong>
+            <span class="meta dim">free scraping · may be bot-challenged on some networks</span>
+          </span>
+        </label>
+        <label class="backend-card">
+          <input type="radio" name="backend" value="exa">
+          <span>
+            <strong>Exa</strong>
+            <span class="meta dim">official API · free 1,000 searches/month, renewable · no credit card · needs a key from <span class="mono">dashboard.exa.ai</span></span>
+          </span>
+        </label>
+      </div>
+      <p class="meta" id="backend-in-effect"></p>
+      <p class="meta dim" id="backend-quota"></p>
+    </div>
+    <div class="card">
+      <h3>Exa API key</h3>
+      <p class="meta" id="exa-key-status"></p>
+      <p class="meta dim">Set the <span class="mono">EXA_API_KEY</span> environment variable and restart the server. The key is never displayed or sent to the browser.</p>
+    </div>
+  </section>
 </main>
 
 <footer>
-  <span>Longview · crawls DuckDuckGo politely (≥2s between requests) · summaries are extractive quotes, not generated</span>
+  <span>Longview · crawls politely (≥2s between requests on DuckDuckGo) · summaries are extractive quotes, not generated</span>
 </footer>
 
 <div id="notice" class="notice hidden" role="status"></div>

@@ -97,6 +97,10 @@ export function openDb(dataDir?: string): Database {
       snippet TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_sources_run ON research_sources(run_id);
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
   // Migrations for DBs created before these columns existed.
   const tableCols = (t: string) =>
@@ -233,6 +237,24 @@ export function listFindings(db: Database, topicId: number): Finding[] {
 export function markFindingRead(db: Database, id: number): boolean {
   const r = db.query("UPDATE findings SET is_new=0 WHERE id=?").run(id);
   return r.changes > 0;
+}
+
+// ---- settings ----
+// Small key/value store for server-persisted preferences (e.g. the selected
+// search backend). Env vars override settings at read time where documented.
+
+export function getSetting(db: Database, key: string): string | null {
+  const r = db
+    .query("SELECT value FROM settings WHERE key=?")
+    .get(key) as { value: string } | null;
+  return r ? r.value : null;
+}
+
+export function setSetting(db: Database, key: string, value: string): void {
+  db.query("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)").run(
+    key,
+    value
+  );
 }
 
 // ---- research runs ----

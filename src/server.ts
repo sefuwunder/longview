@@ -14,6 +14,7 @@ import {
   listFindings,
   markFindingRead,
   topicNewCount,
+  setSetting,
   createResearchRun,
   getResearchRun,
   listResearchRuns,
@@ -23,13 +24,20 @@ import {
   type Topic,
 } from "./db";
 import { crawlTopic, startScheduler } from "./scheduler";
-import { diagnoseDDG } from "./ddg";
+import {
+  initSearch,
+  resolveBackend,
+  diagnoseSearch,
+} from "./search";
+import { exaKeyConfigured } from "./backends/exa";
 import { runResearchPipeline } from "./research";
 
 const PORT = Number(process.env.PORT ?? 3011);
 const PUBLIC = join(import.meta.dir, "..", "public");
 
 const db: Database = openDb();
+// Bind the DB for backend resolution (SEARCH_BACKEND env > persisted setting).
+initSearch(db);
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -169,14 +177,47 @@ const server = Bun.serve({
     }
 
     // ---- crawl diagnostics ----
-    // Probes each DDG endpoint in the fallback chain so a user can see exactly
-    // which one works from their network. Same localhost trust model as the
-    // rest of the app.
+    // Probes the ACTIVE search backend so a user can see exactly what works
+    // from their network. Same localhost trust model as the rest of the app.
     if (p === "/api/diag/crawl" && method === "GET") {
       const q = String(url.searchParams.get("q") ?? "").trim();
       if (!q) return json({ ok: false, error: "q query param is required" }, 400);
-      const d = await diagnoseDDG(q);
+      const d = await diagnoseSearch(db, q);
       return json({ ok: true, ...d });
+    }
+
+    // ---- settings ----
+    // Which search backend is active (ddg | exa) and whether the Exa key is
+    // configured. The key itself is never returned.
+    if (p === "/api/settings" && method === "GET") {
+      const { name, source } = resolveBackend(db);
+      return json({
+        ok: true,
+        settings: {
+          backend: name,
+          backend_source: source,
+          exa_key_configured: exaKeyConfigured(),
+        },
+      });
+    }
+
+    if (p === "/api/settings" && method === "PATCH") {
+      const b = await body(req);
+      if (b.backend !== undefined) {
+        const v = String(b.backend).trim().toLowerCase();
+        if (v !== "ddg" && v !== "exa")
+          return json({ ok: false, error: "backend must be 'ddg' or 'exa'" }, 400);
+        setSetting(db, "backend", v);
+      }
+      const { name, source } = resolveBackend(db);
+      return json({
+        ok: true,
+        settings: {
+          backend: name,
+          backend_source: source,
+          exa_key_configured: exaKeyConfigured(),
+        },
+      });
     }
 
     m = p.match(/^\/api\/topics\/(\d+)\/findings$/);

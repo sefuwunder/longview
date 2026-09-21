@@ -56,7 +56,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   stopStub?.();
-  appProc?.kill();
+  appProc?.kill(9); // SIGTERM is ignored by the spawned server; SIGKILL it
 });
 
 describe("crawl failure persistence + diagnostics API", () => {

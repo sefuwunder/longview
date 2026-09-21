@@ -10,7 +10,8 @@ import {
   setTopicStatus,
   type Topic,
 } from "./db";
-import { crawlDDG, type CrawlResult } from "./ddg";
+import type { SearchResult } from "./search";
+import { search, resolveBackend, type SearchOutcome } from "./search";
 import {
   deepCrawl,
   normalizeUrl,
@@ -34,7 +35,7 @@ export function topicIsDue(
   return nowMs - t.last_crawl_at >= interval;
 }
 
-export type CrawlFn = (query: string) => Promise<CrawlResult>;
+export type CrawlFn = (query: string) => Promise<SearchOutcome>;
 export type DeepCrawlFn = (
   seeds: DeepSeed[],
   query: string,
@@ -44,6 +45,9 @@ export type DeepCrawlFn = (
 
 const defaultDeep: DeepCrawlFn = (seeds, query, maxDepth, opts) =>
   deepCrawl(seeds, query, { ...opts, maxDepth });
+
+/** Default seed search: the active search backend (see src/search.ts). */
+const defaultCrawl: CrawlFn = (q: string) => search(q);
 
 export interface CrawlTopicDeps {
   crawl?: CrawlFn;
@@ -59,12 +63,12 @@ export interface CrawlTopicDeps {
 export async function crawlTopic(
   db: Database,
   topicId: number,
-  crawl: CrawlFn = crawlDDG,
+  crawl: CrawlFn = defaultCrawl,
   deep: DeepCrawlFn = defaultDeep
 ): Promise<{ added: number; total: number; discovered: number }> {
   const topic = getTopic(db, topicId);
   if (!topic) throw new Error("topic not found");
-  let result: CrawlResult;
+  let result: SearchOutcome;
   try {
     result = await crawl(topic.query);
   } catch (e) {
@@ -73,6 +77,7 @@ export async function crawlTopic(
     result = {
       ok: false,
       results: [],
+      backend: resolveBackend(db).name,
       endpoint: null,
       httpStatus: null,
       errorClass: "network",
@@ -124,14 +129,14 @@ export async function crawlTopic(
   };
 }
 
-function deepSeedList(results: CrawlResult["results"]): DeepSeed[] {
+function deepSeedList(results: SearchResult[]): DeepSeed[] {
   return results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet }));
 }
 
 /** One scheduler pass: crawl every due topic. Never throws. */
 export async function sweep(
   db: Database,
-  crawl: CrawlFn = crawlDDG,
+  crawl: CrawlFn = defaultCrawl,
   deep: DeepCrawlFn = defaultDeep
 ): Promise<{ crawled: number; added: number; errors: number }> {
   const now = Date.now();
@@ -152,7 +157,7 @@ export async function sweep(
 }
 
 /** Start the 60s interval sweep. Returns a stop function. */
-export function startScheduler(db: Database, crawl: CrawlFn = crawlDDG): () => void {
+export function startScheduler(db: Database, crawl: CrawlFn = defaultCrawl): () => void {
   const timer = setInterval(() => {
     sweep(db, crawl).catch((e) => console.error("[longview] sweep error", e));
   }, SWEEP_MS);

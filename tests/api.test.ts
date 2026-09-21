@@ -172,7 +172,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   for (const s of stops) s();
-  appProc?.kill();
+  appProc?.kill(9); // SIGTERM is ignored by the spawned server; SIGKILL it
 });
 
 describe("topics API", () => {

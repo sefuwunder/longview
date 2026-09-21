@@ -55,10 +55,34 @@ chain and renders a per-endpoint table (HTTP status, result count, class,
 time) so you can see exactly which endpoint works from your network.
 
 `GET /api/diag/crawl?q=<query>` exposes the same probe as JSON:
-`{ok, query, endpoints: [{endpoint, httpStatus, resultCount, errorClass, ms}], winner}`.
+`{ok, backend, query, endpoints: [{endpoint, httpStatus, resultCount, errorClass, ms}], winner}`.
 
 The crawl path is fully covered by fixture tests, so the parsers are
 verified even where the live endpoints are not reachable.
+
+## Search backends
+
+Longview has two search backends behind one interface (`src/search.ts`):
+
+| backend | what it is | cost | catch |
+|---|---|---|---|
+| `ddg` (default) | scrapes DuckDuckGo's public HTML endpoints | free, no key | DDG bot-challenges some networks — then nothing works |
+| `exa` | Exa's official JSON API (`POST api.exa.ai/search`) | free tier ~1,000 searches/month, renewable, **no credit card** | needs an API key |
+
+**Getting a free Exa key:** sign up at [dashboard.exa.ai](https://dashboard.exa.ai),
+go to Keys, copy a key, then set it as the `EXA_API_KEY` environment
+variable and restart. The Settings tab shows whether a key is configured —
+the key itself is never displayed or sent to the browser.
+
+**Quota math:** each deep-research query variant is one Exa call (up to 5
+per run), each topic crawl is one call. 1,000 free searches/month ≈ 30+
+per day — comfortable for personal use. A 402/429 from Exa is classified
+as `quota` and surfaced in the UI.
+
+**Switching backends:** the Settings tab has a backend selector, persisted
+server-side. `SEARCH_BACKEND=exa` (env) overrides the selector — the
+Settings tab tells you which is in effect. An invalid `SEARCH_BACKEND`
+logs a warning and falls back to `ddg`.
 
 ## Deep crawl — keyword-guided link following
 

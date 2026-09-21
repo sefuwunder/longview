@@ -3,8 +3,7 @@
 // pages are fetched, and an EXTRACTIVE summary is built by scoring sentences
 // on keyword overlap with the question. The UI and README say this plainly.
 
-import type { DDGResult, CrawlResult } from "./ddg";
-import { crawlDDG } from "./ddg";
+import { search, type SearchOutcome, type SearchResult } from "./search";
 import {
   deepCrawl,
   normalizeUrl,
@@ -190,7 +189,7 @@ export function buildReport(
 }
 
 export interface ResearchDeps {
-  crawl?: (q: string) => Promise<CrawlResult>;
+  crawl?: (q: string) => Promise<SearchOutcome>;
   fetchPage?: (url: string) => Promise<string>;
   /** Raw HTML fetcher for the deep crawler (defaults to the real one). */
   fetchHtml?: (url: string) => Promise<string>;
@@ -228,7 +227,7 @@ export async function runResearchPipeline(
   sources: { title: string; url: string; snippet: string }[];
   stats: ResearchStats;
 }> {
-  const crawl = deps.crawl ?? ((q: string) => crawlDDG(q));
+  const crawl = deps.crawl ?? search;
   const fetchPage = deps.fetchPage ?? fetchPageText;
   const maxPages = deps.maxPages ?? 8;
   const maxQueries = deps.maxQueries ?? 5;
@@ -239,7 +238,7 @@ export async function runResearchPipeline(
       deepCrawl(seeds, q, { maxDepth: md, fetchHtml: deps.fetchHtml }));
 
   const variants = queryVariants(question).slice(0, maxQueries);
-  const seen = new Map<string, DDGResult>();
+  const seen = new Map<string, SearchResult>();
   let crawlOk = 0;
   for (const v of variants) {
     try {

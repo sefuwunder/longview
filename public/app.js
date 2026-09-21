@@ -36,8 +36,10 @@
       tabs.forEach(function (x) { x.classList.remove("on"); x.setAttribute("aria-selected", "false"); });
       t.classList.add("on");
       t.setAttribute("aria-selected", "true");
-      $("tab-topics").classList.toggle("hidden", t.dataset.tab !== "topics");
-      $("tab-research").classList.toggle("hidden", t.dataset.tab !== "research");
+      tabs.forEach(function (x) {
+        $("tab-" + x.dataset.tab).classList.toggle("hidden", x !== t);
+      });
+      if (t.dataset.tab === "settings") loadSettings();
     });
   });
 
@@ -254,9 +256,10 @@
     btn.disabled = true;
     btn.textContent = "Probing…";
     out.classList.remove("hidden");
-    out.innerHTML = '<div class="meta dim">Probing DuckDuckGo endpoints…</div>';
+    out.innerHTML = '<div class="meta dim">Probing…</div>';
     try {
       var d = await api("/api/diag/crawl?q=" + encodeURIComponent(currentTopic.query));
+      out.innerHTML = '<div class="meta dim">Probing ' + esc(d.backend === "exa" ? "Exa" : "DuckDuckGo") + ' endpoints…</div>';
       var rows = d.endpoints.map(function (e) {
         var win = e.endpoint === d.winner;
         return "<tr" + (win ? ' class="winner"' : "") + ">" +
@@ -272,7 +275,10 @@
         "</tr></thead><tbody>" + rows + "</tbody></table></div>" +
         (d.winner
           ? ""
-          : '<div class="meta dim" style="margin-top:0.4rem">None of the endpoints returned results from this network.</div>');
+          : '<div class="meta dim" style="margin-top:0.4rem">None of the endpoints returned results from this network.</div>') +
+        (d.backend === "exa" && !d.keyConfigured
+          ? '<div class="err-line" style="margin-top:0.4rem">EXA_API_KEY is not set — the Exa backend cannot work until you configure a key (see the Settings tab).</div>'
+          : "");
     } catch (err) {
       out.innerHTML = '<div class="err-line">' + esc(err.message) + "</div>";
     } finally {
@@ -414,6 +420,55 @@
       notice("Research started.");
       showRun(data.run_id, true);
     } catch (err) { notice(err.message, true); }
+  });
+
+  /* ---------- settings ---------- */
+  var settingsLoaded = false;
+
+  function backendLabel(b) {
+    return b === "exa" ? "Exa" : "DuckDuckGo";
+  }
+
+  async function loadSettings() {
+    try {
+      var data = await api("/api/settings");
+      var s = data.settings;
+      var radios = document.querySelectorAll('input[name="backend"]');
+      radios.forEach(function (r) { r.checked = r.value === s.backend; });
+      var effect = $("backend-in-effect");
+      if (s.backend_source === "env") {
+        effect.innerHTML = "In effect: <strong>" + esc(backendLabel(s.backend)) +
+          "</strong> — the <span class=\"mono\">SEARCH_BACKEND</span> env var overrides the selector above.";
+      } else {
+        effect.innerHTML = "In effect: <strong>" + esc(backendLabel(s.backend)) + "</strong>" +
+          (s.backend_source === "setting" ? " (saved)" : " (default)");
+      }
+      $("backend-quota").textContent =
+        "Each deep-research query variant counts as one Exa search. ~1,000 free searches/month ≈ 30+ per day.";
+      var key = $("exa-key-status");
+      if (s.exa_key_configured) {
+        key.innerHTML = '<span class="badge new">configured</span> Exa key is set on the server.';
+      } else {
+        key.innerHTML = '<span class="badge err">not configured</span> — set <span class="mono">EXA_API_KEY</span> and restart to use Exa.';
+      }
+      settingsLoaded = true;
+    } catch (err) { notice(err.message, true); }
+  }
+
+  document.querySelectorAll('input[name="backend"]').forEach(function (r) {
+    r.addEventListener("change", async function () {
+      try {
+        await api("/api/settings", {
+          method: "PATCH",
+          body: JSON.stringify({ backend: r.value }),
+        });
+        notice("Search backend set to " + backendLabel(r.value) + ".");
+        await loadSettings();
+      } catch (err) {
+        notice(err.message, true);
+        await loadSettings();
+      }
+    });
   });
 
   /* ---------- boot ---------- */

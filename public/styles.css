@@ -274,3 +274,16 @@ footer { text-align: center; color: var(--txt-dim); font-size: 0.78rem; padding:
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- settings ---------- */
+.backend-list { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.8rem 0; }
+/* .card label sets display:block; out-specify it so the cards lay out as rows */
+.card .backend-card {
+  display: flex; gap: 0.7rem; align-items: flex-start;
+  border: 1px solid var(--line); border-radius: 8px; padding: 0.7rem 0.9rem;
+  cursor: pointer; background: var(--ink-2); margin-bottom: 0;
+}
+.backend-card input[type="radio"] { margin-top: 0.25rem; accent-color: #8a6f16; width: auto; display: inline-block; padding: 0; border: none; background: transparent; flex: none; }
+.backend-card span { display: block; }
+.backend-card strong { display: block; margin-bottom: 0.15rem; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; }
