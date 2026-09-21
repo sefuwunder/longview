@@ -136,6 +136,7 @@ Open http://127.0.0.1:3011. `DDG_BASE_URL` overrides the search endpoint
 | POST /api/topics/:id/crawl | manual trigger → `{added, total, discovered}`; 502 on crawl failure (with `error_class`) |
 | GET /api/diag/crawl?q=… | probe each DDG endpoint → `{endpoints, winner}` |
 | GET /api/topics/:id/findings | newest first |
+| GET /api/topics/:id/clusters | findings grouped by the deterministic TF-IDF/k-means classifier (canvas view; computed on demand, no persistence) |
 | POST /api/findings/:id/read | clears the "new" badge |
 | GET /api/research | run history |
 | POST /api/research | `{question}` → 202 `{run_id}`; runs async, poll below |

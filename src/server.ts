@@ -31,6 +31,7 @@ import {
 } from "./search";
 import { exaKeyConfigured } from "./backends/exa";
 import { runResearchPipeline } from "./research";
+import { clusterResults } from "./cluster";
 
 const PORT = Number(process.env.PORT ?? 3011);
 const PUBLIC = join(import.meta.dir, "..", "public");
@@ -231,6 +232,37 @@ const server = Bun.serve({
     if (m && method === "POST") {
       const ok = markFindingRead(db, Number(m[1]));
       return ok ? json({ ok: true }) : json({ ok: false, error: "not found" }, 404);
+    }
+
+    // Clustered findings for the canvas view. Computed on demand from the
+    // same findings store the list view uses — no persistence needed, the
+    // classifier is deterministic so repeated calls return identical output.
+    m = p.match(/^\/api\/topics\/(\d+)\/clusters$/);
+    if (m && method === "GET") {
+      const id = Number(m[1]);
+      if (!getTopic(db, id)) return json({ ok: false, error: "not found" }, 404);
+      const findings = listFindings(db, id);
+      const byId = new Map(findings.map((f) => [f.id, f]));
+      const clusters = clusterResults(
+        findings.map((f) => ({ id: f.id, title: f.title, snippet: f.snippet, url: f.url }))
+      );
+      return json({
+        ok: true,
+        clusters: clusters.map((c) => ({
+          label: c.label,
+          results: c.ids.map((rid) => {
+            const f = byId.get(rid)!;
+            return {
+              id: f.id,
+              url: f.url,
+              title: f.title,
+              snippet: f.snippet,
+              read: f.is_new === 0,
+              depth: f.depth,
+            };
+          }),
+        })),
+      });
     }
 
     // ---- deep research ----

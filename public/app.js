@@ -224,7 +224,61 @@
         } catch (err) { notice(err.message, true); }
       });
     });
+    // Re-crawls and topic switches land here; keep the canvas in sync when active.
+    if (typeof findingsView !== "undefined" && findingsView === "canvas") loadCanvas();
   }
+
+  /* ---------- findings: List | Canvas ---------- */
+  var findingsView = "list";
+  var canvasHandle = null;
+
+  async function loadCanvas() {
+    if (!currentTopic) return;
+    if (!window.LVCanvas) {
+      $("canvas").innerHTML = '<div class="empty">Canvas view failed to load.</div>';
+      return;
+    }
+    try {
+      var data = await api("/api/topics/" + currentTopic.id + "/clusters");
+      if (canvasHandle) { canvasHandle.destroy(); canvasHandle = null; }
+      if (data.clusters.length === 0) {
+        $("canvas").innerHTML = '<div class="empty">No findings yet. Re-crawl to fetch the first batch.</div>';
+        return;
+      }
+      canvasHandle = window.LVCanvas.render($("canvas"), currentTopic.id, data.clusters, {
+        onMarkRead: async function (id) {
+          try {
+            await api("/api/findings/" + id + "/read", { method: "POST" });
+            await loadTopics();
+          } catch (err) { notice(err.message, true); }
+        },
+      });
+    } catch (err) { notice(err.message, true); }
+  }
+
+  function setFindingsView(v) {
+    findingsView = v;
+    var isCanvas = v === "canvas";
+    $("view-list").classList.toggle("on", !isCanvas);
+    $("view-canvas").classList.toggle("on", isCanvas);
+    $("view-list").setAttribute("aria-selected", String(!isCanvas));
+    $("view-canvas").setAttribute("aria-selected", String(isCanvas));
+    $("findings").classList.toggle("hidden", isCanvas);
+    $("canvas-wrap").classList.toggle("hidden", !isCanvas);
+    $("canvas-reset").classList.toggle("hidden", !isCanvas);
+    if (!currentTopic) return;
+    if (isCanvas) loadCanvas();
+    else loadFindings(currentTopic.id); // refresh read states after canvas marking
+  }
+
+  $("view-list").addEventListener("click", function () { setFindingsView("list"); });
+  $("view-canvas").addEventListener("click", function () { setFindingsView("canvas"); });
+  $("canvas-reset").addEventListener("click", function () {
+    if (!currentTopic || !window.LVCanvas) return;
+    window.LVCanvas.store.clear(currentTopic.id);
+    loadCanvas();
+    notice("Canvas layout reset.");
+  });
 
   $("btn-back-topics").addEventListener("click", function () {
     currentTopic = null;

@@ -85,7 +85,15 @@
         </div>
       </div>
       <div id="diag-out" class="hidden"></div>
+      <div class="findings-bar">
+        <div class="seg" role="tablist" aria-label="Findings view">
+          <button type="button" class="seg-btn on" id="view-list" role="tab" aria-selected="true">List</button>
+          <button type="button" class="seg-btn" id="view-canvas" role="tab" aria-selected="false">Canvas</button>
+        </div>
+        <button type="button" class="btn ghost hidden" id="canvas-reset" title="Forget custom note positions and restore the automatic layout">Reset layout</button>
+      </div>
       <div id="findings" class="findings"></div>
+      <div id="canvas-wrap" class="hidden"><div id="canvas" class="canvas" aria-label="Cluster canvas: drag the background to pan, scroll or pinch to zoom, drag notes to rearrange"></div></div>
     </div>
   </section>
 
@@ -158,6 +166,7 @@
 </footer>
 
 <div id="notice" class="notice hidden" role="status"></div>
+<script src="/canvas.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
