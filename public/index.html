@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Longview — research desk</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%23c9a227' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23c9a227'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="16" cy="16" r="4" fill="currentColor"/></svg>
+    <span class="brand-name">Longview</span>
+    <span class="brand-sub">research desk</span>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button class="tab on" data-tab="topics" role="tab" aria-selected="true">Topics</button>
+    <button class="tab" data-tab="research" role="tab" aria-selected="false">Deep research</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ================= TOPICS ================= -->
+  <section id="tab-topics" class="panel" role="tabpanel">
+    <div class="toolbar">
+      <h2>Watched topics</h2>
+      <button class="btn" id="btn-add-topic">+ New topic</button>
+    </div>
+
+    <form id="topic-form" class="card hidden" autocomplete="off">
+      <h3>New watched topic</h3>
+      <label>Name <input id="topic-name" maxlength="80" placeholder="e.g. Solid-state batteries" required></label>
+      <label>Search query <input id="topic-query" maxlength="200" placeholder="e.g. solid state battery news" required></label>
+      <label>Schedule
+        <select id="topic-schedule">
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="manual">Manual only</option>
+        </select>
+      </label>
+      <div class="row">
+        <button type="submit" class="btn primary">Watch topic</button>
+        <button type="button" class="btn ghost" id="topic-cancel">Cancel</button>
+      </div>
+    </form>
+
+    <div id="topic-list" class="topic-list"></div>
+    <div id="topic-empty" class="empty hidden">No topics yet. Add one above and Longview will crawl DuckDuckGo for it on schedule.</div>
+
+    <div id="topic-detail" class="hidden">
+      <button class="btn ghost back" id="btn-back-topics">&larr; All topics</button>
+      <div class="card topic-head">
+        <div>
+          <h2 id="detail-name"></h2>
+          <div class="meta"><span id="detail-query" class="query"></span> <span id="detail-sched" class="badge"></span></div>
+          <div class="meta dim" id="detail-last"></div>
+          <div class="meta dim" id="detail-error"></div>
+        </div>
+        <div class="row">
+          <button class="btn primary" id="btn-crawl">Re-crawl now</button>
+          <button class="btn danger" id="btn-delete-topic">Delete</button>
+        </div>
+      </div>
+      <div id="findings" class="findings"></div>
+    </div>
+  </section>
+
+  <!-- ================= DEEP RESEARCH ================= -->
+  <section id="tab-research" class="panel hidden" role="tabpanel">
+    <div class="toolbar">
+      <h2>Deep research</h2>
+      <span class="meta dim">extractive, no AI — sentences quoted from sources</span>
+    </div>
+    <form id="research-form" class="card" autocomplete="off">
+      <label>Research question
+        <input id="research-q" maxlength="300" placeholder="e.g. How do solid-state batteries work?" required>
+      </label>
+      <button type="submit" class="btn primary">Run research</button>
+      <p class="meta dim">Generates 3–5 query variants, crawls DuckDuckGo, fetches up to 8 pages, and compiles quoted sentences into a report.</p>
+    </form>
+    <div class="research-grid">
+      <div>
+        <h3>Past runs</h3>
+        <div id="run-list" class="run-list"></div>
+      </div>
+      <div id="report-wrap" class="card hidden">
+        <div class="row space">
+          <h3 id="report-title"></h3>
+          <a id="report-export" class="btn" href="#">Export .md</a>
+        </div>
+        <div id="report-status" class="meta dim"></div>
+        <div id="report-body" class="report"></div>
+        <div id="report-sources"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>Longview · crawls DuckDuckGo politely (≥2s between requests) · summaries are extractive quotes, not generated</span>
+</footer>
+
+<div id="notice" class="notice hidden" role="status"></div>
+<script src="/app.js"></script>
+</body>
+</html>
