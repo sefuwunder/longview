@@ -50,6 +50,22 @@ export interface ResearchSource {
   snippet: string;
 }
 
+export interface AgentRun {
+  id: number;
+  question: string;
+  status: string; // "pending" | "working" | "done" | "error"
+  steps_json: string | null; // AgentStep[]
+  plan_json: string | null; // SubQuestion[]
+  graph_json: string | null; // AgentGraph
+  report_md: string | null;
+  error: string | null;
+  created_at: number;
+  pages_read: number | null;
+  sources: number | null;
+  findings: number | null;
+  followups: number | null;
+}
+
 export function defaultDataDir(): string {
   return join(process.cwd(), "data");
 }
@@ -100,6 +116,21 @@ export function openDb(dataDir?: string): Database {
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS agent_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      question TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      steps_json TEXT,
+      plan_json TEXT,
+      graph_json TEXT,
+      report_md TEXT,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      pages_read INTEGER,
+      sources INTEGER,
+      findings INTEGER,
+      followups INTEGER NOT NULL DEFAULT 0
     );
   `);
   // Migrations for DBs created before these columns existed.
@@ -326,4 +357,85 @@ export function listResearchSources(db: Database, runId: number): ResearchSource
   return db
     .query("SELECT run_id, title, url, snippet FROM research_sources WHERE run_id=? ORDER BY rowid")
     .all(runId) as ResearchSource[];
+}
+
+// ---- agent runs ----
+
+export function createAgentRun(db: Database, question: string): AgentRun {
+  return db
+    .query(
+      "INSERT INTO agent_runs (question, status, created_at) VALUES (?, 'pending', ?) RETURNING *"
+    )
+    .get(question, Date.now()) as AgentRun;
+}
+
+export function getAgentRun(db: Database, id: number): AgentRun | null {
+  return (
+    (db.query("SELECT * FROM agent_runs WHERE id=?").get(id) as AgentRun) ??
+    null
+  );
+}
+
+export function listAgentRuns(db: Database): AgentRun[] {
+  return db
+    .query(
+      "SELECT id, question, status, created_at, pages_read, sources, findings, followups FROM agent_runs ORDER BY id DESC LIMIT 50"
+    )
+    .all() as AgentRun[];
+}
+
+export interface AgentRunStats {
+  pagesRead: number;
+  sources: number;
+  findings: number;
+  followups: number;
+}
+
+/** Persist one emitted step by appending it to the run's steps_json. */
+export function appendAgentStep(
+  db: Database,
+  id: number,
+  step: { kind: string; label: string; detail?: string }
+): void {
+  const run = getAgentRun(db, id);
+  if (!run) return;
+  let steps: unknown[] = [];
+  try {
+    steps = run.steps_json ? (JSON.parse(run.steps_json) as unknown[]) : [];
+  } catch {
+    steps = [];
+  }
+  steps.push({ ...step, seq: steps.length, at: Date.now() });
+  db.query("UPDATE agent_runs SET steps_json=? WHERE id=?").run(
+    JSON.stringify(steps),
+    id
+  );
+}
+
+export function setAgentStatus(
+  db: Database,
+  id: number,
+  status: string,
+  opts: {
+    plan?: unknown;
+    graph?: unknown;
+    reportMd?: string | null;
+    error?: string | null;
+    stats?: AgentRunStats | null;
+  } = {}
+): void {
+  db.query(
+    "UPDATE agent_runs SET status=?, plan_json=COALESCE(?, plan_json), graph_json=COALESCE(?, graph_json), report_md=COALESCE(?, report_md), error=?, pages_read=?, sources=?, findings=?, followups=? WHERE id=?"
+  ).run(
+    status,
+    opts.plan !== undefined ? JSON.stringify(opts.plan) : null,
+    opts.graph !== undefined ? JSON.stringify(opts.graph) : null,
+    opts.reportMd !== undefined ? opts.reportMd : null,
+    opts.error ?? null,
+    opts.stats?.pagesRead ?? null,
+    opts.stats?.sources ?? null,
+    opts.stats?.findings ?? null,
+    opts.stats?.followups ?? 0,
+    id
+  );
 }

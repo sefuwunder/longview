@@ -21,6 +21,11 @@ import {
   setRunStatus,
   insertResearchSources,
   listResearchSources,
+  createAgentRun,
+  getAgentRun,
+  listAgentRuns,
+  appendAgentStep,
+  setAgentStatus,
   type Topic,
 } from "./db";
 import { crawlTopic, startScheduler } from "./scheduler";
@@ -30,7 +35,9 @@ import {
   diagnoseSearch,
 } from "./search";
 import { exaKeyConfigured } from "./backends/exa";
+import { parallelKeyConfigured } from "./backends/parallel";
 import { runResearchPipeline } from "./research";
+import { runAgent } from "./agent";
 import { clusterResults } from "./cluster";
 
 const PORT = Number(process.env.PORT ?? 3011);
@@ -106,7 +113,7 @@ const server = Bun.serve({
     // ---- static ----
     if (method === "GET" && (p === "/" || p === "/index.html"))
       return serveStatic("index.html")!;
-    if (method === "GET" && (p === "/styles.css" || p === "/app.js" || p === "/canvas.js"))
+    if (method === "GET" && (p === "/styles.css" || p === "/app.js" || p === "/canvas.js" || p === "/agent-canvas.js"))
       return serveStatic(p.slice(1))!;
 
     // ---- topics ----
@@ -188,8 +195,8 @@ const server = Bun.serve({
     }
 
     // ---- settings ----
-    // Which search backend is active (ddg | exa) and whether the Exa key is
-    // configured. The key itself is never returned.
+    // Which search backend is active (ddg | exa | parallel) and whether the
+    // Exa / Parallel keys are configured. Keys themselves are never returned.
     if (p === "/api/settings" && method === "GET") {
       const { name, source } = resolveBackend(db);
       return json({
@@ -198,6 +205,7 @@ const server = Bun.serve({
           backend: name,
           backend_source: source,
           exa_key_configured: exaKeyConfigured(),
+          parallel_key_configured: parallelKeyConfigured(),
         },
       });
     }
@@ -206,8 +214,8 @@ const server = Bun.serve({
       const b = await body(req);
       if (b.backend !== undefined) {
         const v = String(b.backend).trim().toLowerCase();
-        if (v !== "ddg" && v !== "exa")
-          return json({ ok: false, error: "backend must be 'ddg' or 'exa'" }, 400);
+        if (v !== "ddg" && v !== "exa" && v !== "parallel")
+          return json({ ok: false, error: "backend must be 'ddg', 'exa' or 'parallel'" }, 400);
         setSetting(db, "backend", v);
       }
       const { name, source } = resolveBackend(db);
@@ -217,6 +225,7 @@ const server = Bun.serve({
           backend: name,
           backend_source: source,
           exa_key_configured: exaKeyConfigured(),
+          parallel_key_configured: parallelKeyConfigured(),
         },
       });
     }
@@ -326,6 +335,88 @@ const server = Bun.serve({
         headers: {
           "Content-Type": "text/markdown; charset=utf-8",
           "Content-Disposition": `attachment; filename="longview-${run.id}.md"`,
+        },
+      });
+    }
+
+    // ---- research agent ----
+    // The agent plans a question into lines of inquiry, searches, reads,
+    // reflects on coverage, and synthesizes findings + a graph of its work.
+    // Steps are appended to the run row as they happen; clients poll.
+    if (p === "/api/agent" && method === "GET")
+      return json({ ok: true, runs: listAgentRuns(db) });
+
+    if (p === "/api/agent" && method === "POST") {
+      const b = await body(req);
+      const question = String(b.question ?? "").trim();
+      if (!question) return json({ ok: false, error: "question is required" }, 400);
+      const run = createAgentRun(db, question);
+      // async: client polls; each agent step is persisted as it fires.
+      void (async () => {
+        setAgentStatus(db, run.id, "working");
+        try {
+          const result = await runAgent(question, {
+            onStep: (s) => appendAgentStep(db, run.id, s),
+          });
+          setAgentStatus(db, run.id, "done", {
+            plan: result.plan,
+            graph: result.graph,
+            reportMd: result.report,
+            stats: result.stats,
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          appendAgentStep(db, run.id, { kind: "error", label: msg });
+          setAgentStatus(db, run.id, "error", { error: msg });
+        }
+      })();
+      return json({ ok: true, run_id: run.id }, 202);
+    }
+
+    m = p.match(/^\/api\/agent\/(\d+)$/);
+    if (m && method === "GET") {
+      const run = getAgentRun(db, Number(m[1]));
+      if (!run) return json({ ok: false, error: "not found" }, 404);
+      let steps: unknown[] = [];
+      let plan: unknown = null;
+      let graph: unknown = null;
+      try {
+        steps = run.steps_json ? JSON.parse(run.steps_json) : [];
+        plan = run.plan_json ? JSON.parse(run.plan_json) : null;
+        graph = run.graph_json ? JSON.parse(run.graph_json) : null;
+      } catch {
+        // corrupted JSON — serve what we can
+      }
+      return json({
+        ok: true,
+        run: {
+          id: run.id,
+          question: run.question,
+          status: run.status,
+          steps,
+          plan,
+          graph,
+          report_md: run.report_md,
+          error: run.error,
+          created_at: run.created_at,
+          pages_read: run.pages_read,
+          sources: run.sources,
+          findings: run.findings,
+          followups: run.followups,
+        },
+      });
+    }
+
+    m = p.match(/^\/api\/agent\/(\d+)\/export\.md$/);
+    if (m && method === "GET") {
+      const run = getAgentRun(db, Number(m[1]));
+      if (!run) return json({ ok: false, error: "not found" }, 404);
+      if (run.status !== "done" || !run.report_md)
+        return json({ ok: false, error: "report not ready" }, 409);
+      return new Response(run.report_md, {
+        headers: {
+          "Content-Type": "text/markdown; charset=utf-8",
+          "Content-Disposition": `attachment; filename="longview-agent-${run.id}.md"`,
         },
       });
     }

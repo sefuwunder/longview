@@ -6,16 +6,44 @@ A self-hosted, long-term online research tool. Two modes in one dashboard:
    An in-process scheduler sweeps every 60 seconds and re-crawls due topics.
    Each topic has a timeline of findings; new items carry a "new" badge until
    marked read. Findings dedupe by URL per topic.
-2. **Deep research** — ask a question; Longview generates 3–5 query variants,
-   crawls each, fetches the top pages' text (up to 8 pages, 10s timeout each),
-   then follows relevant links **up to 10 layers deep** (see below) and
-   compiles an **extractive** summary: top sentences by keyword overlap,
+2. **Research agent** — ask a question; a deterministic agent loop plans the
+   inquiry, searches each line with the active backend, reads the top pages,
+   reflects on its own coverage and fires follow-up searches for weak spots,
+   then assembles an **extractive** report: top sentences by keyword overlap,
    quoted verbatim from the sources. **No LLM is involved** — the report is
-   ranked quotes, not generated prose. The report renders with a Sources
+   ranked quotes, not generated prose. The agent's work is visualized on a
+   **canvas**: question → lines of inquiry → sources → findings, with edges
+   showing what surfaced and supports what. The report renders with a Sources
    section and exports as Markdown.
 
 Bun + zero npm dependencies + built-in SQLite. Default port **3011**
 (`PORT` env override). Data lives in `./data/` (gitignored), created on boot.
+
+## Research agent
+
+The agent is a small deterministic loop (`src/agent.ts`) — no model calls:
+
+1. **Plan** — the question itself becomes the first line of inquiry, plus
+   aspect drills derived from content-word runs in the question.
+2. **Search** — each line of inquiry gets up to 3 query variants through the
+   selected backend; results dedupe across lines and are attributed to the
+   line that surfaced them.
+3. **Read** — the top results per line are fetched and extracted.
+4. **Reflect** — every question keyword needs at least 2 evidence hits;
+   keywords below that are weak spots, each getting one targeted follow-up
+   search (new URLs only).
+5. **Synthesize** — evidence is grouped by shared keyword clusters into
+   labeled findings, and a typed output graph is built:
+   question → *line of inquiry* → lines of inquiry → *surfaced* → sources →
+   *supports* → findings.
+
+Live step events (`plan`, `search`, `read`, `reflect`, `followup`,
+`synthesize`, `done`) stream to the UI as the run progresses, and every
+run is persisted (`agent_runs`) with its steps, plan, graph, and report.
+
+One dead query or one dead page never kills a run — per-item failures are
+swallowed and reported; only a total search failure or zero readable pages
+fails the run.
 
 ## DuckDuckGo: the honest version
 
@@ -68,11 +96,18 @@ Longview has two search backends behind one interface (`src/search.ts`):
 |---|---|---|---|
 | `ddg` (default) | scrapes DuckDuckGo's public HTML endpoints | free, no key | DDG bot-challenges some networks — then nothing works |
 | `exa` | Exa's official JSON API (`POST api.exa.ai/search`) | free tier ~1,000 searches/month, renewable, **no credit card** | needs an API key |
+| `parallel` | Parallel's official Search API (`POST api.parallel.ai/v1/search`) with `objective` + `search_queries` per call, mode `basic` | paid, LLM-ready excerpts | needs an API key |
 
 **Getting a free Exa key:** sign up at [dashboard.exa.ai](https://dashboard.exa.ai),
 go to Keys, copy a key, then set it as the `EXA_API_KEY` environment
 variable and restart. The Settings tab shows whether a key is configured —
 the key itself is never displayed or sent to the browser.
+
+**Getting a Parallel key:** sign up at
+[platform.parallel.ai](https://platform.parallel.ai), create an API key,
+then set it as the `PARALLEL_API_KEY` environment variable and restart.
+The Settings tab shows whether a key is configured — the key itself is
+never displayed or sent to the browser.
 
 **Quota math:** each deep-research query variant is one Exa call (up to 5
 per run), each topic crawl is one call. 1,000 free searches/month ≈ 30+
@@ -138,7 +173,11 @@ Open http://127.0.0.1:3011. `DDG_BASE_URL` overrides the search endpoint
 | GET /api/topics/:id/findings | newest first |
 | GET /api/topics/:id/clusters | findings grouped by the deterministic TF-IDF/k-means classifier (canvas view; computed on demand, no persistence) |
 | POST /api/findings/:id/read | clears the "new" badge |
-| GET /api/research | run history |
+| GET /api/agent | run history |
+| POST /api/agent | `{question}` → 202 `{run_id}`; runs async, poll below |
+| GET /api/agent/:id | `{status, steps, plan, graph, report_md, error, pages_read, sources, findings, followups}` — live steps while working |
+| GET /api/agent/:id/export.md | markdown download (409 until done) |
+| GET /api/research | legacy deep-research history (kept for compatibility) |
 | POST /api/research | `{question}` → 202 `{run_id}`; runs async, poll below |
 | GET /api/research/:id | `{status, report_md, sources, error, pages_crawled, max_depth_reached, capped, discovered}` |
 | GET /api/research/:id/export.md | markdown download (409 until done) |

@@ -369,8 +369,127 @@
     } catch (err) { notice(err.message, true); }
   });
 
-  /* ---------- deep research ---------- */
-  var pollTimer = null;
+  /* ---------- research agent ---------- */
+  var agentPollTimer = null;
+  var agentGraphHandle = null;
+  var agentView = "graph";
+
+  var STEP_ICON = {
+    plan: "🧭", search: "🔍", read: "📖", reflect: "🤔",
+    followup: "🔁", synthesize: "🧩", done: "✅", error: "❌",
+  };
+
+  function renderSteps(steps) {
+    var box = $("agent-steps");
+    if (!steps || steps.length === 0) {
+      box.innerHTML = '<div class="meta dim">Waiting for the agent to start…</div>';
+      return;
+    }
+    box.innerHTML = steps.map(function (s) {
+      return '<div class="step step-' + esc(s.kind) + '">' +
+        '<span class="step-icon">' + (STEP_ICON[s.kind] || "•") + "</span>" +
+        '<div class="step-body"><div class="step-label">' + esc(s.label) + "</div>" +
+        (s.detail ? '<div class="step-detail">' + esc(s.detail) + "</div>" : "") +
+        "</div></div>";
+    }).join("");
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function setAgentView(v) {
+    agentView = v;
+    var isGraph = v === "graph";
+    $("agent-view-graph").classList.toggle("on", isGraph);
+    $("agent-view-report").classList.toggle("on", !isGraph);
+    $("agent-view-graph").setAttribute("aria-selected", String(isGraph));
+    $("agent-view-report").setAttribute("aria-selected", String(!isGraph));
+    $("agent-graph-wrap").classList.toggle("hidden", !isGraph);
+    $("agent-report-wrap").classList.toggle("hidden", isGraph);
+  }
+
+  $("agent-view-graph").addEventListener("click", function () { setAgentView("graph"); });
+  $("agent-view-report").addEventListener("click", function () { setAgentView("report"); });
+
+  async function loadAgentRuns() {
+    var data = await api("/api/agent");
+    var list = $("agent-run-list");
+    list.innerHTML = data.runs.length === 0
+      ? '<div class="empty" style="padding:1rem">No agent runs yet. Ask a question above.</div>'
+      : data.runs.map(function (r) {
+          var sub = r.status === "done" && r.findings != null
+            ? " · " + r.findings + " findings from " + r.sources + " sources"
+            : "";
+          return '<div class="run-card" data-id="' + r.id + '" role="button" tabindex="0">' +
+            '<div class="q">' + esc(r.question) + "</div>" +
+            '<div class="foot"><span class="status-dot status-' + esc(r.status) + '"></span>' +
+            "<span>" + esc(r.status) + sub + "</span><span>" + esc(new Date(r.created_at).toLocaleString()) + "</span></div>" +
+            "</div>";
+        }).join("");
+    Array.prototype.forEach.call(list.querySelectorAll(".run-card"), function (el) {
+      var open = function () { showAgentRun(Number(el.dataset.id), true); };
+      el.addEventListener("click", open);
+      el.addEventListener("keydown", function (e) { if (e.key === "Enter") open(); });
+    });
+  }
+
+  async function showAgentRun(id, poll) {
+    clearTimeout(agentPollTimer);
+    var wrap = $("agent-wrap");
+    try {
+      var data = await api("/api/agent/" + id);
+      var run = data.run;
+      wrap.classList.remove("hidden");
+      $("agent-title").textContent = run.status === "done" ? "" : run.question;
+      var exp = $("agent-export");
+      exp.href = "/api/agent/" + id + "/export.md";
+      exp.style.display = run.status === "done" ? "" : "none";
+      renderSteps(run.steps);
+      if (run.status === "done") {
+        var statBits = "Completed · " + run.findings + " findings from " +
+          run.sources + " sources · " + run.pages_read + " pages read";
+        if (run.followups) statBits += " · " + run.followups + " follow-up search" + (run.followups === 1 ? "" : "es");
+        $("agent-status").textContent = statBits;
+        $("agent-report-body").innerHTML = renderReport(run.report_md || "");
+        // Sources come from the graph's source nodes (persisted with the run).
+        var srcNodes = (run.graph && run.graph.nodes ? run.graph.nodes : []).filter(function (n) { return n.kind === "source"; });
+        $("agent-report-sources").innerHTML =
+          '<div class="sources"><h4>Sources</h4><ol>' +
+          srcNodes.map(function (s) {
+            return "<li><a href=\"" + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.label) + "</a>" +
+              (s.detail ? '<span class="snip">' + esc(s.detail) + "</span>" : "") + "</li>";
+          }).join("") + "</ol></div>";
+        if (window.LVAgentCanvas && run.graph && run.graph.nodes && run.graph.nodes.length) {
+          if (agentGraphHandle) { agentGraphHandle.destroy(); agentGraphHandle = null; }
+          agentGraphHandle = window.LVAgentCanvas.render($("agent-canvas"), run.graph, {});
+        } else {
+          $("agent-canvas").innerHTML = '<div class="empty">Graph view failed to load.</div>';
+        }
+      } else if (run.status === "error") {
+        $("agent-status").textContent = "Failed: " + (run.error || "unknown error");
+        $("agent-report-body").innerHTML = "";
+        $("agent-report-sources").innerHTML = "";
+      } else {
+        $("agent-status").textContent = "Agent working — follow the steps below…";
+        if (poll) agentPollTimer = setTimeout(function () { showAgentRun(id, true); }, 2500);
+      }
+      await loadAgentRuns();
+    } catch (err) { notice(err.message, true); }
+  }
+
+  $("agent-form").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    var q = $("agent-q").value.trim();
+    if (!q) return;
+    try {
+      var data = await api("/api/agent", {
+        method: "POST",
+        body: JSON.stringify({ question: q }),
+      });
+      $("agent-q").value = "";
+      notice("Agent started — watch it work below.");
+      setAgentView("graph");
+      showAgentRun(data.run_id, true);
+    } catch (err) { notice(err.message, true); }
+  });
 
   function mdInline(s) {
     return esc(s).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -399,88 +518,15 @@
     return html;
   }
 
-  async function loadRuns() {
-    var data = await api("/api/research");
-    var list = $("run-list");
-    list.innerHTML = data.runs.length === 0
-      ? '<div class="empty" style="padding:1rem">No research runs yet.</div>'
-      : data.runs.map(function (r) {
-          return '<div class="run-card" data-id="' + r.id + '" role="button" tabindex="0">' +
-            '<div class="q">' + esc(r.question) + "</div>" +
-            '<div class="foot"><span class="status-dot status-' + esc(r.status) + '"></span>' +
-            "<span>" + esc(r.status) + "</span><span>" + esc(new Date(r.created_at).toLocaleString()) + "</span></div>" +
-            "</div>";
-        }).join("");
-    Array.prototype.forEach.call(list.querySelectorAll(".run-card"), function (el) {
-      var open = function () { showRun(Number(el.dataset.id), true); };
-      el.addEventListener("click", open);
-      el.addEventListener("keydown", function (e) { if (e.key === "Enter") open(); });
-    });
-  }
-
-  async function showRun(id, poll) {
-    clearTimeout(pollTimer);
-    var wrap = $("report-wrap");
-    try {
-      var data = await api("/api/research/" + id);
-      var run = data.run;
-      wrap.classList.remove("hidden");
-      // The report markdown already opens with an H1 of the question, so the
-      // card header only names it while the run is still working/failed.
-      $("report-title").textContent = run.status === "done" ? "" : run.question;
-      var exp = $("report-export");
-      exp.href = "/api/research/" + id + "/export.md";
-      exp.style.display = run.status === "done" ? "" : "none";
-      if (run.status === "done") {
-        var statBits = "Completed · " + run.sources.length + " sources";
-        if (run.pages_crawled) {
-          statBits += " · " + run.pages_crawled + " pages across " + run.max_depth_reached + " layer" +
-            (run.max_depth_reached === 1 ? "" : "s");
-          if (run.discovered) statBits += " · " + run.discovered + " discovered by deep crawl";
-          if (run.capped) statBits += " (stopped at safety cap)";
-        }
-        $("report-status").textContent = statBits;
-        $("report-body").innerHTML = renderReport(run.report_md || "");
-        $("report-sources").innerHTML =
-          '<div class="sources"><h4>Sources</h4><ol>' +
-          run.sources.map(function (s) {
-            return "<li><a href=\"" + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.title) + "</a>" +
-              (s.snippet ? '<span class="snip">' + esc(s.snippet) + "</span>" : "") + "</li>";
-          }).join("") + "</ol></div>";
-      } else if (run.status === "error") {
-        $("report-status").textContent = "Failed: " + (run.error || "unknown error");
-        $("report-body").innerHTML = "";
-        $("report-sources").innerHTML = "";
-      } else {
-        $("report-status").textContent = "Working — crawling and reading sources…";
-        $("report-body").innerHTML = "";
-        $("report-sources").innerHTML = "";
-        if (poll) pollTimer = setTimeout(function () { showRun(id, true); }, 3000);
-      }
-      await loadRuns();
-    } catch (err) { notice(err.message, true); }
-  }
-
-  $("research-form").addEventListener("submit", async function (e) {
-    e.preventDefault();
-    var q = $("research-q").value.trim();
-    if (!q) return;
-    try {
-      var data = await api("/api/research", {
-        method: "POST",
-        body: JSON.stringify({ question: q }),
-      });
-      $("research-q").value = "";
-      notice("Research started.");
-      showRun(data.run_id, true);
-    } catch (err) { notice(err.message, true); }
-  });
-
   /* ---------- settings ---------- */
   var settingsLoaded = false;
 
   function backendLabel(b) {
-    return b === "exa" ? "Exa" : "DuckDuckGo";
+    return b === "exa" ? "Exa" : b === "parallel" ? "Parallel" : "DuckDuckGo";
+  }
+
+  function keyBadge(ok) {
+    return ok ? '<span class="badge new">configured</span>' : '<span class="badge err">not configured</span>';
   }
 
   async function loadSettings() {
@@ -498,12 +544,22 @@
           (s.backend_source === "setting" ? " (saved)" : " (default)");
       }
       $("backend-quota").textContent =
-        "Each deep-research query variant counts as one Exa search. ~1,000 free searches/month ≈ 30+ per day.";
+        s.backend === "exa"
+          ? "Each agent query counts as one Exa search. ~1,000 free searches/month ≈ 30+ per day."
+          : s.backend === "parallel"
+            ? "Each agent query counts as one Parallel search against your plan's quota."
+            : "DuckDuckGo is scraped politely (≥2s between requests) and may serve bot challenges on some networks.";
       var key = $("exa-key-status");
       if (s.exa_key_configured) {
-        key.innerHTML = '<span class="badge new">configured</span> Exa key is set on the server.';
+        key.innerHTML = keyBadge(true) + " Exa key is set on the server.";
       } else {
-        key.innerHTML = '<span class="badge err">not configured</span> — set <span class="mono">EXA_API_KEY</span> and restart to use Exa.';
+        key.innerHTML = keyBadge(false) + " — set <span class=\"mono\">EXA_API_KEY</span> and restart to use Exa.";
+      }
+      var pkey = $("parallel-key-status");
+      if (s.parallel_key_configured) {
+        pkey.innerHTML = keyBadge(true) + " Parallel key is set on the server.";
+      } else {
+        pkey.innerHTML = keyBadge(false) + " — set <span class=\"mono\">PARALLEL_API_KEY</span> and restart to use Parallel.";
       }
       settingsLoaded = true;
     } catch (err) { notice(err.message, true); }
@@ -527,5 +583,5 @@
 
   /* ---------- boot ---------- */
   loadTopics().catch(function (e) { notice(e.message, true); });
-  loadRuns().catch(function (e) { notice(e.message, true); });
+  loadAgentRuns().catch(function (e) { notice(e.message, true); });
 })();

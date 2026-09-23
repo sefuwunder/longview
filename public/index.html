@@ -16,7 +16,7 @@
   </div>
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button class="tab on" data-tab="topics" role="tab" aria-selected="true">Topics</button>
-    <button class="tab" data-tab="research" role="tab" aria-selected="false">Deep research</button>
+    <button class="tab" data-tab="agent" role="tab" aria-selected="false">Agent</button>
     <button class="tab" data-tab="settings" role="tab" aria-selected="false">Settings</button>
   </nav>
 </header>
@@ -97,32 +97,43 @@
     </div>
   </section>
 
-  <!-- ================= DEEP RESEARCH ================= -->
-  <section id="tab-research" class="panel hidden" role="tabpanel">
+  <!-- ================= RESEARCH AGENT ================= -->
+  <section id="tab-agent" class="panel hidden" role="tabpanel">
     <div class="toolbar">
-      <h2>Deep research</h2>
-      <span class="meta dim">extractive, no AI — sentences quoted from sources</span>
+      <h2>Research agent</h2>
+      <span class="meta dim">plans · searches · reads · reflects · synthesizes — deterministic, no AI</span>
     </div>
-    <form id="research-form" class="card" autocomplete="off">
+    <form id="agent-form" class="card" autocomplete="off">
       <label>Research question
-        <input id="research-q" maxlength="300" placeholder="e.g. How do solid-state batteries work?" required>
+        <input id="agent-q" maxlength="300" placeholder="e.g. How do solid-state batteries work?" required>
       </label>
-      <button type="submit" class="btn primary">Run research</button>
-      <p class="meta dim">Generates 3–5 query variants, crawls the active search backend, fetches up to 8 pages, follows relevant links up to 10 layers deep, and compiles quoted sentences into a report.</p>
+      <button type="submit" class="btn primary">Ask the agent</button>
+      <p class="meta dim">The agent breaks your question into lines of inquiry, searches each with the active backend, reads the pages, checks its own coverage and follows up on weak spots, then assembles findings — visualized on the canvas.</p>
     </form>
     <div class="research-grid">
       <div>
         <h3>Past runs</h3>
-        <div id="run-list" class="run-list"></div>
+        <div id="agent-run-list" class="run-list"></div>
       </div>
-      <div id="report-wrap" class="card hidden">
+      <div id="agent-wrap" class="card hidden">
         <div class="row space">
-          <h3 id="report-title"></h3>
-          <a id="report-export" class="btn" href="#">Export .md</a>
+          <h3 id="agent-title"></h3>
+          <a id="agent-export" class="btn" href="#">Export .md</a>
         </div>
-        <div id="report-status" class="meta dim"></div>
-        <div id="report-body" class="report"></div>
-        <div id="report-sources"></div>
+        <div id="agent-status" class="meta dim"></div>
+        <div id="agent-steps" class="steps" aria-live="polite"></div>
+        <div class="seg" role="tablist" aria-label="Run output view">
+          <button id="agent-view-graph" class="seg-btn on" role="tab" aria-selected="true">Graph</button>
+          <button id="agent-view-report" class="seg-btn" role="tab" aria-selected="false">Report</button>
+        </div>
+        <div id="agent-graph-wrap">
+          <div id="agent-canvas" class="agent-canvas"></div>
+          <p class="meta dim">Click a node to highlight its neighborhood — a finding lights up the sources that support it. Click a source's title to open it.</p>
+        </div>
+        <div id="agent-report-wrap" class="hidden">
+          <div id="agent-report-body" class="report"></div>
+          <div id="agent-report-sources"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -149,6 +160,13 @@
             <span class="meta dim">official API · free 1,000 searches/month, renewable · no credit card · needs a key from <span class="mono">dashboard.exa.ai</span></span>
           </span>
         </label>
+        <label class="backend-card">
+          <input type="radio" name="backend" value="parallel">
+          <span>
+            <strong>Parallel</strong>
+            <span class="meta dim">official API · LLM-ready excerpts per result · needs a key from <span class="mono">platform.parallel.ai</span></span>
+          </span>
+        </label>
       </div>
       <p class="meta" id="backend-in-effect"></p>
       <p class="meta dim" id="backend-quota"></p>
@@ -157,6 +175,11 @@
       <h3>Exa API key</h3>
       <p class="meta" id="exa-key-status"></p>
       <p class="meta dim">Set the <span class="mono">EXA_API_KEY</span> environment variable and restart the server. The key is never displayed or sent to the browser.</p>
+    </div>
+    <div class="card">
+      <h3>Parallel API key</h3>
+      <p class="meta" id="parallel-key-status"></p>
+      <p class="meta dim">Set the <span class="mono">PARALLEL_API_KEY</span> environment variable and restart the server. The key is never displayed or sent to the browser.</p>
     </div>
   </section>
 </main>
@@ -167,6 +190,7 @@
 
 <div id="notice" class="notice hidden" role="status"></div>
 <script src="/canvas.js"></script>
+<script src="/agent-canvas.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
