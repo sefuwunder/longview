@@ -6,7 +6,7 @@ const PORT = 32271;
 const BASE = `http://127.0.0.1:${PORT}/v1/search`;
 
 let server: ReturnType<typeof Bun.serve> | null = null;
-let mode: "ok" | "auth" | "quota" | "empty" = "ok";
+let mode: "ok" | "auth" | "quota" | "empty" | "strict" | "always422" = "ok";
 let lastBody: unknown = null;
 let lastAuth = "";
 
@@ -19,6 +19,15 @@ beforeAll(() => {
       const ct = { headers: { "Content-Type": "application/json" } };
       if (mode === "auth") return new Response("{}", { status: 401, ...ct });
       if (mode === "quota") return new Response("{}", { status: 429, ...ct });
+      if (mode === "always422")
+        return new Response(JSON.stringify({ detail: "extra_forbidden" }), { status: 422, ...ct });
+      if (mode === "strict") {
+        // Mimics Parallel's real schema validation: max_results is only
+        // valid nested under advanced_settings; a top-level copy → 422.
+        const allowed = new Set(["objective", "search_queries", "mode", "max_chars_total", "client_model", "session_id", "advanced_settings"]);
+        const extra = Object.keys((lastBody ?? {}) as object).filter((k) => !allowed.has(k));
+        if (extra.length) return new Response(JSON.stringify({ detail: "extra_forbidden" }), { status: 422, ...ct });
+      }
       if (mode === "empty")
         return new Response(JSON.stringify({ results: [] }), ct);
       return new Response(
@@ -65,6 +74,32 @@ describe("searchParallel", () => {
     expect(body.mode).toBe("basic");
     expect(body.search_queries).toEqual(["solar panels"]);
     expect(typeof body.objective).toBe("string");
+    // max_results must be nested under advanced_settings — a top-level copy
+    // is rejected by the real API with 422 (regression, 2026-09-23).
+    expect(body.max_results).toBeUndefined();
+    expect((body.advanced_settings as Record<string, unknown>)?.max_results).toBe(10);
+  });
+
+  test("strict-schema stub accepts the request (no 422)", async () => {
+    mode = "strict";
+    const r = await searchParallel("solar panels", {
+      apiBase: BASE,
+      apiKey: "k",
+    });
+    expect(r.ok).toBe(true);
+    expect(r.httpStatus).toBe(200);
+    mode = "ok";
+  });
+
+  test("a 422 from the API surfaces the schema-mismatch diagnostic", async () => {
+    mode = "always422";
+    const r = await searchParallel("x", { apiBase: BASE, apiKey: "k" });
+    expect(r.ok).toBe(false);
+    expect(r.errorClass).toBe("http_422");
+    expect(r.httpStatus).toBe(422);
+    expect(r.error).toContain("rejected the search request as invalid");
+    expect(r.error).not.toContain("try again later");
+    mode = "ok";
   });
 
   test("missing key → auth failure without network", async () => {

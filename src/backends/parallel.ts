@@ -100,8 +100,10 @@ export async function searchParallel(
         objective: `Find authoritative web results about: ${query}`,
         search_queries: [query],
         mode: "basic",
-        max_results: maxResults,
         max_chars_total: 8000,
+        // max_results is ONLY valid nested here — a top-level copy is
+        // rejected by the API with 422 (extra fields forbidden).
+        advanced_settings: { max_results: maxResults },
       }),
       signal: controller.signal,
     });
@@ -112,6 +114,15 @@ export async function searchParallel(
       return fail(
         "quota",
         "Parallel quota exhausted or rate-limited — try again later",
+        res.status,
+        ms
+      );
+    if (res.status === 422)
+      // Deterministic: the request we built doesn't match the API schema.
+      // "Try again later" would be wrong advice — this needs a code fix.
+      return fail(
+        "http_422",
+        "Parallel rejected the search request as invalid (HTTP 422) — the request longview built didn't match the API schema; check for an app update",
         res.status,
         ms
       );
