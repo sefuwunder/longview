@@ -26,6 +26,24 @@ import {
   listAgentRuns,
   appendAgentStep,
   setAgentStatus,
+  setAgentRunFolder,
+  createFolder,
+  getFolder,
+  listFolders,
+  countUnfiledRuns,
+  updateFolder,
+  deleteFolder,
+  createJournal,
+  getJournal,
+  listJournals,
+  updateJournal,
+  deleteJournal,
+  addJournalEntry,
+  listJournalEntries,
+  updateJournalEntryNote,
+  deleteJournalEntry,
+  reorderJournalEntries,
+  journalExportMd,
   type Topic,
 } from "./db";
 import { crawlTopic, startScheduler } from "./scheduler";
@@ -350,7 +368,23 @@ const server = Bun.serve({
       const b = await body(req);
       const question = String(b.question ?? "").trim();
       if (!question) return json({ ok: false, error: "question is required" }, 400);
-      const run = createAgentRun(db, question);
+      // Optional filing: a folder for the new run, and a parent run for
+      // chat-driven follow-ups. Both are validated; unknown ids → 400.
+      let folderId: number | null = null;
+      if (b.folder_id !== undefined && b.folder_id !== null) {
+        const n = Number(b.folder_id);
+        if (!Number.isInteger(n) || !getFolder(db, n))
+          return json({ ok: false, error: "unknown folder_id" }, 400);
+        folderId = n;
+      }
+      let parentRunId: number | null = null;
+      if (b.parent_run_id !== undefined && b.parent_run_id !== null) {
+        const n = Number(b.parent_run_id);
+        if (!Number.isInteger(n) || !getAgentRun(db, n))
+          return json({ ok: false, error: "unknown parent_run_id" }, 400);
+        parentRunId = n;
+      }
+      const run = createAgentRun(db, question, { folderId, parentRunId });
       // async: client polls; each agent step is persisted as it fires.
       void (async () => {
         setAgentStatus(db, run.id, "working");
@@ -403,8 +437,28 @@ const server = Bun.serve({
           sources: run.sources,
           findings: run.findings,
           followups: run.followups,
+          folder_id: run.folder_id ?? null,
+          parent_run_id: run.parent_run_id ?? null,
         },
       });
+    }
+
+    // Move a run between folders. Unknown folder → 400; unknown run → 404.
+    if (m && method === "PATCH") {
+      const b = await body(req);
+      if (b.folder_id === undefined)
+        return json({ ok: false, error: "folder_id is required (null to unfile)" }, 400);
+      let folderId: number | null = null;
+      if (b.folder_id !== null) {
+        const n = Number(b.folder_id);
+        if (!Number.isInteger(n) || !getFolder(db, n))
+          return json({ ok: false, error: "unknown folder_id" }, 400);
+        folderId = n;
+      }
+      const ok = setAgentRunFolder(db, Number(m[1]), folderId);
+      return ok
+        ? json({ ok: true, run_id: Number(m[1]), folder_id: folderId })
+        : json({ ok: false, error: "not found" }, 404);
     }
 
     m = p.match(/^\/api\/agent\/(\d+)\/export\.md$/);
@@ -419,6 +473,199 @@ const server = Bun.serve({
           "Content-Disposition": `attachment; filename="longview-agent-${run.id}.md"`,
         },
       });
+    }
+
+    // ---- folders ----
+    // Organize agent runs into a nestable tree. Deleting a folder unfiles
+    // its runs (folder_id NULL) and re-parents its children — runs are
+    // never deleted by folder operations.
+    if (p === "/api/folders" && method === "GET") {
+      return json({
+        ok: true,
+        folders: listFolders(db).map((f) => ({
+          id: f.id,
+          name: f.name,
+          parent_id: f.parent_id,
+          created_at: f.created_at,
+          run_count: f.run_count ?? 0,
+        })),
+        unfiled_count: countUnfiledRuns(db),
+      });
+    }
+
+    if (p === "/api/folders" && method === "POST") {
+      const b = await body(req);
+      const name = String(b.name ?? "").trim();
+      if (!name) return json({ ok: false, error: "name is required" }, 400);
+      let parentId: number | null = null;
+      if (b.parent_id !== undefined && b.parent_id !== null) {
+        const n = Number(b.parent_id);
+        if (!Number.isInteger(n))
+          return json({ ok: false, error: "unknown parent_id" }, 400);
+        parentId = n;
+      }
+      try {
+        const f = createFolder(db, name, parentId);
+        return json({ ok: true, folder: { id: f.id, name: f.name, parent_id: f.parent_id, created_at: f.created_at, run_count: 0 } }, 201);
+      } catch (e) {
+        return json({ ok: false, error: e instanceof Error ? e.message : "invalid folder" }, 400);
+      }
+    }
+
+    m = p.match(/^\/api\/folders\/(\d+)$/);
+    if (m) {
+      const id = Number(m[1]);
+      if (method === "PATCH") {
+        const b = await body(req);
+        const patch: { name?: string; parent_id?: number | null } = {};
+        if (b.name !== undefined) patch.name = String(b.name);
+        if (b.parent_id !== undefined) {
+          if (b.parent_id === null) patch.parent_id = null;
+          else {
+            const n = Number(b.parent_id);
+            if (!Number.isInteger(n))
+              return json({ ok: false, error: "unknown parent_id" }, 400);
+            patch.parent_id = n;
+          }
+        }
+        try {
+          const f = updateFolder(db, id, patch);
+          return f
+            ? json({ ok: true, folder: { id: f.id, name: f.name, parent_id: f.parent_id, created_at: f.created_at } })
+            : json({ ok: false, error: "not found" }, 404);
+        } catch (e) {
+          return json({ ok: false, error: e instanceof Error ? e.message : "invalid folder" }, 400);
+        }
+      }
+      if (method === "DELETE") {
+        const ok = deleteFolder(db, id);
+        return ok ? json({ ok: true }) : json({ ok: false, error: "not found" }, 404);
+      }
+    }
+
+    // ---- journals ----
+    // Compile data points (findings, sources, freeform notes) from agent
+    // runs into editable, reorderable journals with markdown export.
+    if (p === "/api/journals" && method === "GET") {
+      return json({
+        ok: true,
+        journals: listJournals(db).map((j) => ({
+          id: j.id,
+          title: j.title,
+          created_at: j.created_at,
+          updated_at: j.updated_at,
+          entry_count: j.entry_count ?? 0,
+        })),
+      });
+    }
+
+    if (p === "/api/journals" && method === "POST") {
+      const b = await body(req);
+      const title = String(b.title ?? "").trim();
+      if (!title) return json({ ok: false, error: "title is required" }, 400);
+      const j = createJournal(db, title);
+      return json({ ok: true, journal: { id: j.id, title: j.title, created_at: j.created_at, updated_at: j.updated_at, entry_count: 0 } }, 201);
+    }
+
+    const journalShape = (id: number) => {
+      const j = getJournal(db, id);
+      if (!j) return null;
+      return {
+        id: j.id,
+        title: j.title,
+        created_at: j.created_at,
+        updated_at: j.updated_at,
+        entries: listJournalEntries(db, id).map((e) => ({
+          id: e.id,
+          run_id: e.run_id,
+          run_question: e.run_question ?? null,
+          kind: e.kind,
+          ref_text: e.ref_text,
+          note: e.note,
+          position: e.position,
+        })),
+      };
+    };
+
+    m = p.match(/^\/api\/journals\/(\d+)\/export\.md$/);
+    if (m && method === "GET") {
+      const md = journalExportMd(db, Number(m[1]));
+      if (md === null) return json({ ok: false, error: "not found" }, 404);
+      return new Response(md, {
+        headers: {
+          "Content-Type": "text/markdown; charset=utf-8",
+          "Content-Disposition": `attachment; filename="longview-journal-${m[1]}.md"`,
+        },
+      });
+    }
+
+    m = p.match(/^\/api\/journals\/(\d+)\/entries\/reorder$/);
+    if (m && method === "POST") {
+      const b = await body(req);
+      const ids = b.entry_ids;
+      if (!Array.isArray(ids) || !ids.every((n) => Number.isInteger(Number(n))))
+        return json({ ok: false, error: "entry_ids must be an array of entry ids" }, 400);
+      const j = getJournal(db, Number(m[1]));
+      if (!j) return json({ ok: false, error: "not found" }, 404);
+      const ok = reorderJournalEntries(db, j.id, ids.map(Number));
+      return ok ? json({ ok: true, journal: journalShape(j.id) }) : json({ ok: false, error: "entry_ids must match the journal's entries exactly" }, 400);
+    }
+
+    m = p.match(/^\/api\/journals\/(\d+)\/entries\/(\d+)$/);
+    if (m) {
+      const jid = Number(m[1]);
+      const eid = Number(m[2]);
+      if (method === "PATCH") {
+        const b = await body(req);
+        const e = updateJournalEntryNote(db, jid, eid, String(b.note ?? ""));
+        return e ? json({ ok: true, journal: journalShape(jid) }) : json({ ok: false, error: "not found" }, 404);
+      }
+      if (method === "DELETE") {
+        if (!getJournal(db, jid)) return json({ ok: false, error: "not found" }, 404);
+        const ok = deleteJournalEntry(db, jid, eid);
+        return ok ? json({ ok: true, journal: journalShape(jid) }) : json({ ok: false, error: "not found" }, 404);
+      }
+    }
+
+    m = p.match(/^\/api\/journals\/(\d+)\/entries$/);
+    if (m && method === "POST") {
+      const jid = Number(m[1]);
+      const b = await body(req);
+      try {
+        addJournalEntry(db, jid, {
+          runId: b.run_id === undefined || b.run_id === null ? null : Number(b.run_id),
+          kind: b.kind as "finding" | "source" | "note",
+          refText: String(b.ref_text ?? ""),
+          note: String(b.note ?? ""),
+        });
+        return json({ ok: true, journal: journalShape(jid) }, 201);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "invalid entry";
+        const status = msg === "journal not found" || msg === "run not found" ? 404 : 400;
+        return json({ ok: false, error: msg }, status);
+      }
+    }
+
+    m = p.match(/^\/api\/journals\/(\d+)$/);
+    if (m) {
+      const id = Number(m[1]);
+      if (method === "GET") {
+        const j = journalShape(id);
+        return j ? json({ ok: true, journal: j }) : json({ ok: false, error: "not found" }, 404);
+      }
+      if (method === "PATCH") {
+        const b = await body(req);
+        try {
+          const j = updateJournal(db, id, String(b.title ?? ""));
+          return j ? json({ ok: true, journal: journalShape(j.id) }) : json({ ok: false, error: "not found" }, 404);
+        } catch (e) {
+          return json({ ok: false, error: e instanceof Error ? e.message : "invalid title" }, 400);
+        }
+      }
+      if (method === "DELETE") {
+        const ok = deleteJournal(db, id);
+        return ok ? json({ ok: true }) : json({ ok: false, error: "not found" }, 404);
+      }
     }
 
     return json({ ok: false, error: "not found" }, 404);

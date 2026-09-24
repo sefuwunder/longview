@@ -97,44 +97,107 @@
     </div>
   </section>
 
-  <!-- ================= RESEARCH AGENT ================= -->
+  <!-- ================= RESEARCH DESK ================= -->
   <section id="tab-agent" class="panel hidden" role="tabpanel">
     <div class="toolbar">
-      <h2>Research agent</h2>
-      <span class="meta dim">plans · searches · reads · reflects · synthesizes — deterministic, no AI</span>
+      <h2>Research desk</h2>
+      <span class="meta dim">folders · journals · agent chat — deterministic, no AI</span>
     </div>
-    <form id="agent-form" class="card" autocomplete="off">
-      <label>Research question
-        <input id="agent-q" maxlength="300" placeholder="e.g. How do solid-state batteries work?" required>
-      </label>
-      <button type="submit" class="btn primary">Ask the agent</button>
-      <p class="meta dim">The agent breaks your question into lines of inquiry, searches each with the active backend, reads the pages, checks its own coverage and follows up on weak spots, then assembles findings — visualized on the canvas.</p>
-    </form>
-    <div class="research-grid">
-      <div>
-        <h3>Past runs</h3>
-        <div id="agent-run-list" class="run-list"></div>
+    <div class="desk">
+      <aside class="desk-side" aria-label="Folders and journals">
+        <div class="desk-block">
+          <div class="row space">
+            <h3>Folders</h3>
+            <button class="btn ghost sm" id="btn-add-folder">+ New</button>
+          </div>
+          <div id="folder-tree" class="ftree" role="tree" aria-label="Run folders"></div>
+        </div>
+        <div class="desk-block">
+          <div class="row space">
+            <h3>Journals</h3>
+            <button class="btn ghost sm" id="btn-add-journal">+ New</button>
+          </div>
+          <div id="journal-list" class="jlist"></div>
+        </div>
+      </aside>
+
+      <div class="desk-center">
+        <form id="agent-form" class="card" autocomplete="off">
+          <label>Research question
+            <input id="agent-q" maxlength="300" placeholder="e.g. How do solid-state batteries work?" required>
+          </label>
+          <button type="submit" class="btn primary">Ask the agent</button>
+          <p class="meta dim">The agent breaks your question into lines of inquiry, searches each with the active backend, reads the pages, checks its own coverage and follows up on weak spots, then assembles findings — visualized on the canvas.</p>
+        </form>
+
+        <div id="agent-home">
+          <div class="row space">
+            <h3 id="run-list-title">Past runs</h3>
+            <span class="meta dim" id="run-list-sub"></span>
+          </div>
+          <div id="agent-run-list" class="run-list"></div>
+        </div>
+
+        <div id="journal-wrap" class="card hidden">
+          <div class="row space">
+            <div>
+              <h3 id="journal-title"></h3>
+              <div class="meta dim" id="journal-meta"></div>
+            </div>
+            <div class="row">
+              <a id="journal-export" class="btn" href="#">Export .md</a>
+              <button class="btn ghost sm" id="journal-rename">Rename</button>
+              <button class="btn danger sm" id="journal-delete">Delete</button>
+            </div>
+          </div>
+          <div id="journal-entries" class="jentries"></div>
+          <form id="journal-note-form" class="row" autocomplete="off">
+            <input id="journal-note-input" maxlength="500" placeholder="Add a freeform note to this journal…" style="flex:1">
+            <button class="btn sm" type="submit">+ Note</button>
+          </form>
+          <div class="row" style="margin-top:0.6rem">
+            <button class="btn ghost sm" id="journal-back">&larr; Back to runs</button>
+          </div>
+        </div>
+
+        <div id="agent-wrap" class="card hidden">
+          <div class="row space">
+            <h3 id="agent-title"></h3>
+            <a id="agent-export" class="btn" href="#">Export .md</a>
+          </div>
+          <div id="agent-status" class="meta dim"></div>
+          <div id="agent-steps" class="steps" aria-live="polite"></div>
+          <div class="seg" role="tablist" aria-label="Run output view">
+            <button id="agent-view-graph" class="seg-btn on" role="tab" aria-selected="true">Graph</button>
+            <button id="agent-view-report" class="seg-btn" role="tab" aria-selected="false">Report</button>
+          </div>
+          <div id="agent-graph-wrap">
+            <div id="agent-canvas" class="agent-canvas"></div>
+            <p class="meta dim">Click a node to highlight its neighborhood — a finding lights up the sources that support it. Click a source's title to open it.</p>
+          </div>
+          <div id="agent-report-wrap" class="hidden">
+            <div id="agent-report-body" class="report"></div>
+            <div id="agent-report-sources"></div>
+            <div id="agent-datapoints" class="datapoints"></div>
+          </div>
+        </div>
       </div>
-      <div id="agent-wrap" class="card hidden">
-        <div class="row space">
-          <h3 id="agent-title"></h3>
-          <a id="agent-export" class="btn" href="#">Export .md</a>
+
+      <aside class="desk-chat" id="desk-chat" aria-label="Agent chat">
+        <div class="chat-head">
+          <h3>Agent chat</h3>
+          <span class="flex-sp"></span>
+          <button class="btn ghost sm" id="chat-toggle" aria-expanded="true" title="Collapse chat">–</button>
         </div>
-        <div id="agent-status" class="meta dim"></div>
-        <div id="agent-steps" class="steps" aria-live="polite"></div>
-        <div class="seg" role="tablist" aria-label="Run output view">
-          <button id="agent-view-graph" class="seg-btn on" role="tab" aria-selected="true">Graph</button>
-          <button id="agent-view-report" class="seg-btn" role="tab" aria-selected="false">Report</button>
+        <p class="meta dim chat-sub">Drives the deterministic pipeline — not a freeform oracle.</p>
+        <div class="chat-body" id="chat-body">
+          <div id="chat-msgs" class="chat-msgs" aria-live="polite"></div>
+          <form id="chat-form" class="chat-form" autocomplete="off">
+            <input id="chat-input" maxlength="300" placeholder='Try "research …" or "help"' aria-label="Chat message">
+            <button class="btn primary" type="submit">Send</button>
+          </form>
         </div>
-        <div id="agent-graph-wrap">
-          <div id="agent-canvas" class="agent-canvas"></div>
-          <p class="meta dim">Click a node to highlight its neighborhood — a finding lights up the sources that support it. Click a source's title to open it.</p>
-        </div>
-        <div id="agent-report-wrap" class="hidden">
-          <div id="agent-report-body" class="report"></div>
-          <div id="agent-report-sources"></div>
-        </div>
-      </div>
+      </aside>
     </div>
   </section>
   <!-- ================= SETTINGS ================= -->

@@ -440,3 +440,189 @@ a.ag-title:hover { text-decoration: underline; }
   .agent-canvas { height: 58vh; min-height: 320px; }
   .steps { max-height: 180px; }
 }
+
+/* ---------- research desk ---------- */
+.desk {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) 320px;
+  gap: 1rem;
+  align-items: start;
+}
+.desk-side { display: flex; flex-direction: column; gap: 1rem; }
+.desk-block {
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.9rem;
+}
+.desk-block h3 { font-size: 0.95rem; margin: 0; }
+.desk-center { min-width: 0; }
+.desk-center > * + * { margin-top: 1rem; }
+
+/* folder tree */
+.ftree-row {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.32rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+.ftree-row:hover { background: rgba(201, 162, 39, 0.08); }
+.ftree-row.sel { background: rgba(201, 162, 39, 0.16); }
+.ftree-row:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+.ftree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ftree-menu { margin-left: auto; padding: 0 0.3rem; }
+
+/* journal list */
+.jrow {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.32rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.88rem;
+}
+.jrow:hover { background: rgba(201, 162, 39, 0.08); }
+.jrow.sel { background: rgba(201, 162, 39, 0.16); }
+.jrow:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+.jrow-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* popover menus */
+.popover {
+  position: absolute;
+  z-index: 80;
+  min-width: 170px;
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.popover button {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; color: var(--txt);
+  padding: 0.45rem 0.6rem; border-radius: 6px; cursor: pointer;
+  font-size: 0.87rem;
+}
+.popover button:hover { background: rgba(201, 162, 39, 0.12); }
+.popover button.danger { color: var(--red); }
+.popover input, .popover select {
+  width: 100%; box-sizing: border-box;
+  margin-bottom: 0.5rem; padding: 0.45rem 0.6rem;
+  background: var(--ink); color: var(--txt);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.pp-title { font-size: 0.8rem; color: var(--txt-dim); margin-bottom: 0.4rem; padding: 0 0.2rem; }
+
+/* run list additions */
+.run-card .badge { margin-left: 0.3rem; }
+.badge.follow { border-color: #b07fb0; color: #d9b8d9; }
+.run-move { margin-left: auto; }
+
+/* data points */
+.datapoints { margin-top: 1.2rem; }
+.datapoints h4 { font-family: var(--font); margin: 0 0 0.3rem; }
+.dp-group { margin-top: 0.8rem; }
+.dp-head { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--inktxt-dim); margin-bottom: 0.35rem; }
+.dp-row {
+  display: flex; gap: 0.8rem; align-items: flex-start;
+  padding: 0.55rem 0.7rem; margin-bottom: 0.4rem;
+  background: rgba(28, 35, 51, 0.06);
+  border: 1px solid var(--paper-dim);
+  border-radius: 8px;
+}
+.dp-main { flex: 1; min-width: 0; font-size: 0.88rem; }
+.dp-main a { color: #2a5f8a; }
+
+/* journal view */
+.jentries { margin: 1rem 0; display: flex; flex-direction: column; gap: 0.7rem; }
+.jentry {
+  border: 1px solid var(--paper-dim);
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  background: rgba(28, 35, 51, 0.04);
+}
+.jentry-ref { margin: 0.45rem 0; font-size: 0.92rem; line-height: 1.45; }
+.jentry-note { font-size: 0.85rem; color: var(--inktxt-dim); }
+.jentry-note .linklike { color: #2a5f8a; }
+.badge.kind-finding { border-color: #b07fb0; color: #8a5f8a; }
+.badge.kind-source { border-color: var(--green); color: #4a7a3a; }
+.badge.kind-note { border-color: var(--brass); color: #8a6d1f; }
+.danger-text { color: var(--red); }
+.linklike.danger-text:hover { color: var(--red); }
+.jentry-acts .linklike { padding: 0 0.25rem; }
+
+/* chat panel */
+.desk-chat {
+  background: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex; flex-direction: column;
+  max-height: calc(100vh - 140px);
+  position: sticky; top: 1rem;
+}
+.chat-head { display: flex; align-items: center; gap: 0.5rem; padding: 0.8rem 0.9rem 0.2rem; }
+.chat-head h3 { font-size: 0.95rem; margin: 0; }
+.chat-sub { padding: 0 0.9rem; margin: 0.1rem 0 0.5rem; font-size: 0.75rem; }
+.chat-body { display: flex; flex-direction: column; min-height: 0; padding: 0 0.9rem 0.9rem; }
+.chat-msgs {
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 0.55rem;
+  min-height: 220px; max-height: 52vh;
+  padding: 0.2rem 0;
+}
+.chat-msg {
+  font-size: 0.87rem; line-height: 1.45;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  overflow-wrap: break-word;
+}
+.chat-msg.user {
+  align-self: flex-end;
+  background: rgba(201, 162, 39, 0.16);
+  border: 1px solid rgba(201, 162, 39, 0.4);
+  max-width: 92%;
+}
+.chat-msg.bot {
+  align-self: flex-start;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  max-width: 96%;
+}
+.chat-msg a { color: var(--brass-soft); }
+.chat-form { display: flex; gap: 0.5rem; margin-top: 0.6rem; }
+.chat-form input {
+  flex: 1; min-width: 0;
+  padding: 0.55rem 0.7rem;
+  background: var(--ink); color: var(--txt);
+  border: 1px solid var(--line); border-radius: 8px;
+  font-size: 0.87rem;
+}
+.desk-chat.collapsed .chat-sub { display: none; }
+
+/* responsive: chat becomes a floating dock, sidebar stacks */
+@media (max-width: 1200px) {
+  .desk { grid-template-columns: 250px minmax(0, 1fr); }
+  /* Let the last content scroll clear of the floating dock while it is open. */
+  .desk:has(.desk-chat:not(.collapsed)) { padding-bottom: 22rem; }
+  .desk-chat {
+    position: fixed;
+    right: 1rem; bottom: 1rem;
+    width: min(360px, calc(100vw - 2rem));
+    z-index: 60;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    max-height: 62vh;
+  }
+  .desk-chat.collapsed { width: auto; }
+}
+@media (max-width: 860px) {
+  .desk { grid-template-columns: minmax(0, 1fr); }
+  .desk-side { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+}
+@media (max-width: 560px) {
+  .desk-side { grid-template-columns: 1fr; }
+}
+
+/* reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .ftree-row, .jrow, .popover button, .chat-msg { transition: none; }
+}
