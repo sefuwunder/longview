@@ -8,7 +8,9 @@ A self-hosted, long-term online research tool. Two modes in one dashboard:
    marked read. Findings dedupe by URL per topic.
 2. **Research agent** — ask a question; a deterministic agent loop plans the
    inquiry, searches each line with the active backend, reads the top pages,
-   reflects on its own coverage and fires follow-up searches for weak spots,
+   deep-crawls outward up to 8 link layers (growing its keyword set from
+   newly found associated keywords as it goes), reflects on its own coverage
+   and fires follow-up searches for weak spots,
    then assembles an **extractive** report: top sentences by keyword overlap,
    quoted verbatim from the sources. **No LLM is involved** — the report is
    ranked quotes, not generated prose. The agent's work is visualized on a
@@ -37,7 +39,7 @@ The agent is a small deterministic loop (`src/agent.ts`) — no model calls:
    question → *line of inquiry* → lines of inquiry → *surfaced* → sources →
    *supports* → findings.
 
-Live step events (`plan`, `search`, `read`, `reflect`, `followup`,
+Live step events (`plan`, `search`, `read`, `crawl`, `reflect`, `followup`,
 `synthesize`, `done`) stream to the UI as the run progresses, and every
 run is persisted (`agent_runs`) with its steps, plan, graph, and report.
 
