@@ -296,6 +296,20 @@ describe("deepCrawl keyword expansion", () => {
     expect(deep.viaUrl).toBe(BASE + "/kw-mid");
   });
 
+  test("records per-page keyword contributions", async () => {
+    const r = await deepCrawl([seed("/kw-seed")], "tidal energy", {
+      maxDepth: 2,
+      expandKeywords: true,
+      noDelay: true,
+    });
+    const byUrl = new Map(r.pages.map((p) => [p.url, p]));
+    expect(byUrl.get(BASE + "/kw-seed")!.kwAdded).toEqual([]);
+    expect(byUrl.get(BASE + "/kw-mid")!.kwAdded).toContain("photovoltaic");
+    // every contributed keyword appears in the run's newKeywords
+    for (const p of r.pages)
+      for (const k of p.kwAdded) expect(r.newKeywords).toContain(k);
+  });
+
   test("maxNewKeywords caps growth", async () => {
     const r = await deepCrawl([seed("/kw-seed")], "tidal energy", {
       maxDepth: 2,

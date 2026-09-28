@@ -92,6 +92,7 @@ class FakeElement {
   get innerHTML() { return this._rawHtml; }
   set innerHTML(html: string) {
     this._rawHtml = html;
+    for (const c of this.children) c.parent = null;
     this.children = [];
     this.textContent = "";
     parseHtml(this, html);
@@ -253,24 +254,37 @@ function makeWindow() {
 function makeDocument() {
   const byId = new Map<string, FakeElement>();
   const body = new FakeElement("body");
+  const attached = (el: FakeElement): boolean => {
+    let cur: FakeElement | null = el;
+    while (cur) { if (cur === body) return true; cur = cur.parent; }
+    return false;
+  };
   const doc: any = {
     body,
     _byId: byId,
     createElement: (t: string) => new FakeElement(t),
     createElementNS: (_ns: string, t: string) => new FakeElement(t),
     listeners: {} as Record<string, Function[]>,
-    addEventListener: (t: string, fn: Function) => { (doc.listeners[t] = doc.listeners[t] || []).push(fn); },
+    addEventListener: (t: string, fn: Function, opts?: any) => {
+      (doc.listeners[t] = doc.listeners[t] || []).push({
+        fn, capture: !!(opts && (opts.capture || opts === true)),
+      } as any);
+    },
     removeEventListener: (t: string, fn: Function) => {
-      doc.listeners[t] = (doc.listeners[t] || []).filter((f) => f !== fn);
+      doc.listeners[t] = (doc.listeners[t] || []).filter((l: any) => l.fn !== fn);
     },
     getElementById: (id: string) => {
-      if (!byId.has(id)) {
-        const el = new FakeElement("div");
-        el.setAttribute("id", id);
-        byId.set(id, el);
-        body.appendChild(el);
-      }
-      return byId.get(id)!;
+      const cached = byId.get(id);
+      if (cached && attached(cached)) return cached;
+      // the cached element was replaced (e.g. via innerHTML): re-search the live tree
+      const found = body.querySelector("#" + id);
+      if (found) { byId.set(id, found); return found; }
+      if (cached) return cached;
+      const el = new FakeElement("div");
+      el.setAttribute("id", id);
+      byId.set(id, el);
+      body.appendChild(el);
+      return el;
     },
     querySelector: (sel: string) => {
       const parts = sel.trim().split(/\s+/);

@@ -78,6 +78,16 @@ export interface AgentGraphNode {
   label: string;
   url?: string;
   detail?: string;
+  /** Source nodes: crawl depth (0 = seed page). */
+  depth?: number;
+  /** Source nodes: associated keywords this page contributed while crawling. */
+  kwAdded?: string[];
+  /** Source nodes: evidence sentences drawn from this page. */
+  evidence?: number;
+  /** Source nodes: domain of the parent page it was discovered on (null for seeds). */
+  via?: string | null;
+  /** Source nodes: short text snippet from the search result / page. */
+  snippet?: string;
 }
 
 export interface AgentGraphEdge {
@@ -277,7 +287,15 @@ function domainOf(url: string): string {
 export function buildAgentGraph(
   question: string,
   plan: SubQuestion[],
-  sources: { title: string; url: string }[],
+  sources: {
+    title: string;
+    url: string;
+    snippet?: string;
+    depth?: number;
+    kwAdded?: string[];
+    evidence?: number;
+    via?: string | null;
+  }[],
   findings: Finding[],
   foundVia: Map<string, string>
 ): AgentGraph {
@@ -297,6 +315,11 @@ export function buildAgentGraph(
       label: s.title,
       url: s.url,
       detail: domainOf(s.url),
+      snippet: s.snippet ?? "",
+      depth: s.depth ?? 0,
+      kwAdded: s.kwAdded ?? [],
+      evidence: s.evidence ?? 0,
+      via: s.via ?? null,
     });
     const via = foundVia.get(s.url);
     if (via && plan.some((p) => p.id === via))
@@ -440,7 +463,14 @@ export async function runAgent(
   }
 
   // ---- 3. READ ----
-  const pages: { url: string; title: string; snippet: string; text: string }[] = [];
+  const pages: {
+    url: string;
+    title: string;
+    snippet: string;
+    text: string;
+    depth: number;
+    kwAdded: string[];
+  }[] = [];
   const readUrls = new Set<string>();
   const readPool = async (urls: string[], label: string) => {
     let read = 0;
@@ -456,6 +486,8 @@ export async function runAgent(
             title: meta?.title ?? u,
             snippet: meta?.snippet ?? "",
             text,
+            depth: 0,
+            kwAdded: [],
           });
           read++;
         }
@@ -488,6 +520,7 @@ export async function runAgent(
   let crawledPages = 0;
   let crawlDepth = 0;
   let newKeywords: string[] = [];
+  const crawlVia = new Map<string, string | null>();
   if (maxCrawlDepth > 0) {
     const seeds: DeepSeed[] = pages.map((p) => ({
       title: p.title,
@@ -511,6 +544,7 @@ export async function runAgent(
     crawledPages = dc.pagesCrawled;
     crawlDepth = dc.maxDepthReached;
     newKeywords = dc.newKeywords;
+    for (const p of dc.pages) crawlVia.set(p.url, p.viaUrl);
     // Attribute each discovered page to a line of inquiry by walking its
     // viaUrl chain back to the seed it grew from.
     const via = new Map(dc.pages.map((p) => [p.url, p.viaUrl]));
@@ -533,7 +567,14 @@ export async function runAgent(
         seen.set(p.url, { title: p.title, url: p.url, snippet: p.snippet });
       }
       foundVia.set(p.url, subqOf(p.url));
-      pages.push({ url: p.url, title: p.title, snippet: p.snippet, text: p.text });
+      pages.push({
+        url: p.url,
+        title: p.title,
+        snippet: p.snippet,
+        text: p.text,
+        depth: p.depth,
+        kwAdded: p.kwAdded,
+      });
       added++;
     }
     emit(
@@ -594,10 +635,20 @@ export async function runAgent(
 
   // ---- 6. SYNTHESIZE ----
   const findings = groupFindings(evidence);
+  const evCount = new Map<string, number>();
+  for (const e of evidence) evCount.set(e.url, (evCount.get(e.url) ?? 0) + 1);
+  const viaDomain = new Map<string, string | null>();
+  for (const p of pages) if (!viaDomain.has(p.url)) viaDomain.set(p.url, null);
+  for (const [url, parent] of crawlVia)
+    viaDomain.set(url, parent ? domainOf(parent) : null);
   const sources = pages.map((p) => ({
     title: p.title,
     url: p.url,
     snippet: p.snippet,
+    depth: p.depth,
+    kwAdded: p.kwAdded,
+    evidence: evCount.get(p.url) ?? 0,
+    via: viaDomain.get(p.url) ?? null,
   }));
   const graph = buildAgentGraph(question, plan, sources, findings, foundVia);
   const note =

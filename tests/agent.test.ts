@@ -187,6 +187,26 @@ describe("buildAgentGraph", () => {
       expect(incoming.length).toBeGreaterThan(0);
     }
   });
+
+  test("source nodes carry depth, kwAdded, and evidence counts", () => {
+    const sources = PAGES.map((p, i) => ({
+      title: p.title,
+      url: p.url,
+      depth: i,
+      kwAdded: i === 1 ? ["inverter"] : [],
+      evidence: i + 1,
+    }));
+    const foundVia = new Map(PAGES.map((p) => [p.url, "q0"] as [string, string]));
+    const g = buildAgentGraph(Q, planQuestion(Q), sources, [], foundVia);
+    const nodes = g.nodes.filter((n) => n.kind === "source");
+    expect(nodes).toHaveLength(2);
+    expect(nodes[0].depth).toBe(0);
+    expect(nodes[0].kwAdded).toEqual([]);
+    expect(nodes[0].evidence).toBe(1);
+    expect(nodes[1].depth).toBe(1);
+    expect(nodes[1].kwAdded).toEqual(["inverter"]);
+    expect(nodes[1].evidence).toBe(2);
+  });
 });
 
 describe("runAgent (stubbed)", () => {
@@ -212,6 +232,7 @@ describe("runAgent (stubbed)", () => {
           depth: 0,
           viaUrl: null,
           text: "seed text",
+          kwAdded: [],
         })),
         pagesCrawled: seeds.length,
         maxDepthReached: 0,
@@ -265,6 +286,7 @@ describe("runAgent (stubbed)", () => {
           depth: 0,
           viaUrl: null as string | null,
           text: "seed text",
+          kwAdded: [] as string[],
         })),
         {
           title: "Deep find",
@@ -273,6 +295,7 @@ describe("runAgent (stubbed)", () => {
           depth: 2,
           viaUrl: seeds[0].url,
           text: PAGES[0].text,
+          kwAdded: ["inverter"],
         },
       ],
       pagesCrawled: seeds.length + 1,

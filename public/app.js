@@ -674,6 +674,9 @@
       var exp = $("agent-export");
       exp.href = "/api/agent/" + id + "/export.md";
       exp.style.display = run.status === "done" ? "" : "none";
+      var rev = $("agent-review");
+      rev.style.display = "none";
+      rev.onclick = null;
       renderSteps(run.steps);
       if (run.status === "done") {
         var statBits = "Completed · " + run.findings + " findings from " +
@@ -695,6 +698,10 @@
               (s.detail ? '<span class="snip">' + esc(s.detail) + "</span>" : "") + "</li>";
           }).join("") + "</ol></div>";
         renderDataPoints(run);
+        if (srcNodes.length && window.LVReview) {
+          rev.style.display = "";
+          rev.onclick = function () { window.LVReview.open(id, run); };
+        }
         if (window.LVAgentCanvas && run.graph && run.graph.nodes && run.graph.nodes.length) {
           if (agentGraphHandle) { agentGraphHandle.destroy(); agentGraphHandle = null; }
           agentGraphHandle = window.LVAgentCanvas.render($("agent-canvas"), run.graph, {});
@@ -731,6 +738,331 @@
       showAgentRun(data.run_id, true);
     } catch (err) { notice(err.message, true); }
   });
+
+  /* ---------- target review HUD: coverflow meets fighter HUD ---------- */
+  // Full-screen, touch-first triage for a run's crawled pages. Pages ride a
+  // 3D coverflow; the focused card is "locked" with targeting brackets, and
+  // HUD readouts show depth / new-signal keywords / evidence / tracked-from.
+  // Keep/drop verdicts persist per run in localStorage.
+  var ReviewHUD = (function () {
+    var root = null, stageEl = null, flow = null;
+    var runId = null, mission = "", pages = [], cards = [];
+    var focus = 0, filter = "all", verdicts = {}, maxDepth = 0;
+    var drag = null, suppressClickUntil = 0;
+
+    function vkey() { return "lv-review-" + runId; }
+    function pad(n) { return (n < 10 ? "0" : "") + n; }
+    function domainOf(u) {
+      var m = String(u || "").match(/^https?:\/\/([^/]+)/);
+      return m ? m[1].replace(/^www\./, "") : "";
+    }
+    function loadVerdicts() {
+      verdicts = {};
+      try { verdicts = JSON.parse(localStorage.getItem(vkey()) || "{}") || {}; }
+      catch (e) { verdicts = {}; }
+    }
+    function saveVerdicts() {
+      try { localStorage.setItem(vkey(), JSON.stringify(verdicts)); } catch (e) { /* private mode */ }
+    }
+    function decided() {
+      return pages.filter(function (p) { return !!verdicts[p.url]; }).length;
+    }
+    function list() {
+      return pages.filter(function (p) {
+        var v = verdicts[p.url];
+        if (filter === "keep") return v === "keep";
+        if (filter === "drop") return v === "drop";
+        if (filter === "todo") return !v;
+        return true;
+      });
+    }
+    function isOpen() { return !!root && !root.classList.contains("hidden"); }
+
+    function build() {
+      root = $("review-hud");
+      root.innerHTML =
+        '<div class="hud-top">' +
+          '<span class="hud-title">◈ TGT REVIEW</span>' +
+          '<span class="hud-mission" id="hud-mission"></span>' +
+          '<span class="hud-tgt" id="hud-tgt" aria-live="polite"></span>' +
+          '<button class="hud-x" id="hud-x" aria-label="Close review">✕</button>' +
+        "</div>" +
+        '<div class="hud-sub">' +
+          '<div class="hud-filter" id="hud-filter" role="tablist" aria-label="Filter targets"></div>' +
+          '<span class="hud-prog" id="hud-prog"></span>' +
+          '<button class="hud-clr" id="hud-clr" title="Clear all keep/drop verdicts">CLR</button>' +
+        "</div>" +
+        '<div class="hud-stage" id="hud-stage">' +
+          '<div class="hud-cross-h"></div><div class="hud-cross-v"></div><div class="hud-reticle"></div>' +
+          '<div class="hud-flow" id="hud-flow"></div>' +
+          '<div class="hud-alt" id="hud-alt" aria-hidden="true"></div>' +
+        "</div>" +
+        '<div class="hud-data" id="hud-data"></div>' +
+        '<div class="hud-actions">' +
+          '<button class="hud-btn keep" id="hud-keep">◈ KEEP</button>' +
+          '<button class="hud-btn open" id="hud-open">OPEN ↗</button>' +
+          '<button class="hud-btn drop" id="hud-drop">◇ DROP</button>' +
+        "</div>" +
+        '<div class="hud-tape" id="hud-tape" aria-label="Target index"></div>';
+      stageEl = $("hud-stage");
+      flow = $("hud-flow");
+      var filters = [["all", "ALL"], ["todo", "TODO"], ["keep", "KEPT"], ["drop", "DROPPED"]];
+      $("hud-filter").innerHTML = filters.map(function (f) {
+        return '<button role="tab" data-f="' + f[0] + '">' + f[1] + "</button>";
+      }).join("");
+      Array.prototype.forEach.call($("hud-filter").querySelectorAll("button"), function (b) {
+        b.addEventListener("click", function () { setFilter(b.getAttribute("data-f")); });
+      });
+      $("hud-x").addEventListener("click", close);
+      $("hud-keep").addEventListener("click", function () { setVerdict("keep"); });
+      $("hud-drop").addEventListener("click", function () { setVerdict("drop"); });
+      $("hud-open").addEventListener("click", openUrl);
+      $("hud-clr").addEventListener("click", function () {
+        verdicts = {}; saveVerdicts(); focus = 0; renderAll();
+      });
+      // touch / mouse swipe across the stage
+      stageEl.addEventListener("pointerdown", function (e) {
+        drag = { x: e.clientX || 0, dx: 0 };
+        stageEl.classList.add("dragging");
+        flow.style.transition = "none";
+        if (e.pointerId !== undefined && stageEl.setPointerCapture) {
+          try { stageEl.setPointerCapture(e.pointerId); } catch (err) { /* noop */ }
+        }
+      });
+      stageEl.addEventListener("pointermove", function (e) {
+        if (!drag) return;
+        drag.dx = (e.clientX || 0) - drag.x;
+        flow.style.transform = "translateX(" + drag.dx + "px)";
+      });
+      function endDrag(e) {
+        if (!drag) return;
+        var dx = drag.dx; drag = null;
+        stageEl.classList.remove("dragging");
+        flow.style.transition = "";
+        flow.style.transform = "";
+        if (Math.abs(dx) > 60) {
+          suppressClickUntil = Date.now() + 350;
+          setFocus(focus + (dx < 0 ? 1 : -1));
+        } else {
+          layout();
+        }
+        if (e && e.cancelable !== false) { /* release handled by browser */ }
+      }
+      stageEl.addEventListener("pointerup", endDrag);
+      stageEl.addEventListener("pointercancel", endDrag);
+    }
+
+    function cardHtml(p, i) {
+      var v = verdicts[p.url];
+      var sig = p.kw.slice(0, 3).map(function (k) {
+        return '<span class="sig">+' + esc(k) + "</span>";
+      }).join("");
+      return '<div class="tgt-card" data-i="' + i + '" role="button" tabindex="0" aria-label="Target ' + (i + 1) + ": " + esc(p.title) + '">' +
+        '<span class="brk tl"></span><span class="brk tr"></span><span class="brk bl"></span><span class="brk br"></span>' +
+        '<div class="card-in">' +
+          '<div class="tgt-top">' +
+            '<span class="depth' + (p.depth > 0 ? " deep" : "") + '">' + (p.depth === 0 ? "SEED" : "D" + p.depth) + "</span>" +
+            (v ? '<span class="verdict ' + v + '">' + (v === "keep" ? "◈ KEEP" : "◇ DROP") + "</span>" : "") +
+          "</div>" +
+          '<div class="tgt-title">' + esc(p.title) + "</div>" +
+          '<div class="tgt-domain">' + esc(p.domain) + "</div>" +
+          '<div class="tgt-snip">' + esc(p.snippet) + "</div>" +
+          (sig ? '<div class="tgt-sigs">' + sig + "</div>" : "") +
+          '<div class="tgt-foot">' +
+            '<span class="ev">EVD <b>' + p.ev + "</b></span>" +
+            (p.via ? "<span>TRK " + esc(p.via) + "</span>" : "<span>TRK —</span>") +
+            "<span>TGT " + pad(i + 1) + "</span>" +
+          "</div>" +
+        "</div>" +
+      "</div>";
+    }
+
+    function renderCards() {
+      var l = list();
+      if (focus > l.length - 1) focus = Math.max(0, l.length - 1);
+      flow.innerHTML = l.map(cardHtml).join("");
+      cards = Array.prototype.slice.call(flow.querySelectorAll(".tgt-card"));
+      cards.forEach(function (c, i) {
+        c.addEventListener("click", function () {
+          if (Date.now() < suppressClickUntil) return;
+          if (i === focus) openUrl(); else setFocus(i);
+        });
+        c.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") { if (i === focus) openUrl(); else setFocus(i); }
+        });
+      });
+      layout();
+    }
+
+    function step() {
+      var w = (cards.length && cards[0].offsetWidth) || 300;
+      return w * 0.62;
+    }
+
+    function layout() {
+      var s = step();
+      cards.forEach(function (c, i) {
+        var o = i - focus;
+        if (Math.abs(o) > 3) { c.style.display = "none"; c.classList.remove("locked"); return; }
+        c.style.display = "";
+        var x = o * s, z = -Math.abs(o) * 160, r = -o * 32;
+        var sc = 1 - Math.min(Math.abs(o), 3) * 0.12;
+        c.style.transform =
+          "translateX(" + x.toFixed(1) + "px)" +
+          " translateZ(" + z.toFixed(0) + "px)" +
+          " rotateY(" + r.toFixed(1) + "deg)" +
+          " scale(" + sc.toFixed(3) + ")";
+        c.style.opacity = String(Math.max(0.15, 1 - Math.abs(o) * 0.3));
+        c.style.zIndex = String(50 - Math.abs(o));
+        var locked = o === 0;
+        c.classList.toggle("locked", locked);
+        c.setAttribute("aria-current", locked ? "true" : "false");
+      });
+    }
+
+    function setFocus(i) {
+      var n = list().length;
+      if (!n) return;
+      focus = Math.max(0, Math.min(n - 1, i));
+      layout();
+      updateChrome();
+    }
+
+    function updateChrome() {
+      var l = list(), p = l[focus];
+      $("hud-mission").textContent = mission;
+      $("hud-tgt").innerHTML = l.length
+        ? 'TGT <b>' + pad(focus + 1) + "</b>/" + pad(l.length)
+        : "TGT —/—";
+      $("hud-prog").innerHTML = "RVW <b>" + decided() + "</b>/" + pages.length;
+      Array.prototype.forEach.call($("hud-filter").querySelectorAll("button"), function (b) {
+        var on = b.getAttribute("data-f") === filter;
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-selected", String(on));
+      });
+      // data readout strip
+      var cells = p ? [
+        ["DEPTH", p.depth === 0 ? "<b>SEED</b>" : "<b>D" + p.depth + "</b>"],
+        ["SIG", p.kw.length ? "<b>+" + p.kw.length + "</b> " + esc(p.kw.slice(0, 2).join(", ")) : "—"],
+        ["EVD", "<b>" + p.ev + "</b>"],
+        ["TRK", p.via ? esc(p.via) : "—"],
+      ] : [["DEPTH", "—"], ["SIG", "—"], ["EVD", "—"], ["TRK", "—"]];
+      $("hud-data").innerHTML = cells.map(function (c) {
+        return '<div class="hud-cell"><div class="k">' + c[0] + '</div><div class="v">' + c[1] + "</div></div>";
+      }).join("");
+      // depth tape (altitude ladder)
+      var alt = $("hud-alt");
+      if (maxDepth > 0) {
+        var html = "";
+        for (var d = maxDepth; d >= 0; d--) {
+          html += '<div class="alt-tick' + (p && p.depth === d ? " on" : "") + '">' +
+            '<span class="n">' + (d === 0 ? "SEED" : "D" + d) + '</span><span class="bar"></span></div>';
+        }
+        alt.innerHTML = html;
+        alt.style.display = "";
+      } else {
+        alt.innerHTML = "";
+        alt.style.display = "none";
+      }
+      // bottom tape
+      var tape = $("hud-tape");
+      tape.innerHTML = l.map(function (t, i) {
+        var v = verdicts[t.url];
+        return '<button class="tape-i' + (i === focus ? " on" : "") + (v ? " " + v : "") + '" data-i="' + i + '">' +
+          '<span class="ti">' + pad(i + 1) + '</span><span class="td">' + (t.depth === 0 ? "SEED" : "D" + t.depth) + "</span></button>";
+      }).join("");
+      Array.prototype.forEach.call(tape.querySelectorAll(".tape-i"), function (b) {
+        b.addEventListener("click", function () { setFocus(Number(b.getAttribute("data-i"))); });
+      });
+      var cur = tape.querySelector(".tape-i.on");
+      if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest", inline: "center" });
+      // action states
+      var v = p ? verdicts[p.url] : null;
+      $("hud-keep").classList.toggle("on", v === "keep");
+      $("hud-drop").classList.toggle("on", v === "drop");
+    }
+
+    function renderAll() {
+      if (!pages.length) {
+        flow.innerHTML = '<div class="hud-empty"><span class="big">◎</span><span>NO TARGETS ACQUIRED</span><span>this run has no source pages</span></div>';
+        cards = [];
+      } else {
+        renderCards();
+      }
+      updateChrome();
+    }
+
+    function setFilter(f) {
+      if (filter === f) return;
+      filter = f; focus = 0;
+      renderAll();
+    }
+
+    function setVerdict(v) {
+      var l = list(), p = l[focus];
+      if (!p) return;
+      if (verdicts[p.url] === v) delete verdicts[p.url];
+      else verdicts[p.url] = v;
+      saveVerdicts();
+      renderAll();
+    }
+
+    function openUrl() {
+      var l = list(), p = l[focus];
+      if (p && p.url && window.open) window.open(p.url, "_blank", "noopener");
+    }
+
+    function onKey(e) {
+      if (!isOpen()) return;
+      var k = e.key;
+      if (k === "Escape") { close(); }
+      else if (k === "ArrowRight") { setFocus(focus + 1); e.preventDefault(); }
+      else if (k === "ArrowLeft") { setFocus(focus - 1); e.preventDefault(); }
+      else if (k === "Enter") { openUrl(); }
+      else if (k === "k" || k === "K") { setVerdict("keep"); }
+      else if (k === "x" || k === "X") { setVerdict("drop"); }
+    }
+
+    function open(id, run) {
+      runId = id;
+      mission = run.question || ("Run #" + id);
+      var nodes = (run.graph && run.graph.nodes) || [];
+      pages = nodes.filter(function (n) { return n.kind === "source"; }).map(function (n) {
+        return {
+          title: n.label || n.url || "Untitled",
+          url: n.url || "",
+          domain: n.detail || domainOf(n.url),
+          snippet: n.snippet || "",
+          depth: typeof n.depth === "number" ? n.depth : 0,
+          kw: Array.isArray(n.kwAdded) ? n.kwAdded : [],
+          ev: typeof n.evidence === "number" ? n.evidence : 0,
+          via: n.via || null,
+        };
+      });
+      maxDepth = pages.reduce(function (m, p) { return Math.max(m, p.depth); }, 0);
+      loadVerdicts();
+      focus = 0; filter = "all";
+      build();
+      renderAll();
+      root.classList.remove("hidden");
+      document.body.style.overflow = "hidden";
+      document.addEventListener("keydown", onKey, true);
+      var x = $("hud-x");
+      if (x && x.focus) x.focus();
+    }
+
+    function close() {
+      if (!root) return;
+      root.classList.add("hidden");
+      document.body.style.overflow = "";
+      document.removeEventListener("keydown", onKey, true);
+      var b = $("agent-review");
+      if (b && b.focus) b.focus();
+    }
+
+    return { open: open, close: close, isOpen: isOpen };
+  })();
+  window.LVReview = ReviewHUD;
 
   function mdInline(s) {
     return esc(s).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");

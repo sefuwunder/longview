@@ -28,6 +28,8 @@ export interface DeepPage {
   viaUrl: string | null;
   /** Plain text extracted from the page (for the extractive summarizer). */
   text: string;
+  /** Associated keywords this page contributed to the gating set. */
+  kwAdded: string[];
 }
 
 export interface DeepCrawlResult {
@@ -345,6 +347,20 @@ export async function deepCrawl(
     pagesCrawled++;
     if (job.depth > maxDepthReached) maxDepthReached = job.depth;
     const text = htmlToText(html);
+    // Grow the gating set from what the crawl itself discovers: newly found
+    // associated keywords steer the link scoring of all deeper layers.
+    // Record per-page contributions so review UIs can show them.
+    let kwAdded: string[] = [];
+    if (o.expandKeywords) {
+      kwAdded = associatedKeywords(text, kw, o.keywordsPerPage).slice(
+        0,
+        Math.max(0, o.maxNewKeywords - newKeywords.length)
+      );
+      for (const k of kwAdded) {
+        kw.add(k);
+        newKeywords.push(k);
+      }
+    }
     pages.push({
       title: job.title || pageTitle(html, job.url),
       url: job.url,
@@ -352,16 +368,8 @@ export async function deepCrawl(
       depth: job.depth,
       viaUrl: job.viaUrl,
       text,
+      kwAdded,
     });
-    // Grow the gating set from what the crawl itself discovers: newly found
-    // associated keywords steer the link scoring of all deeper layers.
-    if (o.expandKeywords) {
-      for (const k of associatedKeywords(text, kw, o.keywordsPerPage)) {
-        if (newKeywords.length >= o.maxNewKeywords) break;
-        kw.add(k);
-        newKeywords.push(k);
-      }
-    }
     if (job.depth >= o.maxDepth) continue;
     const scored: { link: RawLink; norm: string; score: number }[] = [];
     for (const link of extractLinks(html, job.url)) {

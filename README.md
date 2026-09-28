@@ -47,6 +47,30 @@ One dead query or one dead page never kills a run — per-item failures are
 swallowed and reported; only a total search failure or zero readable pages
 fails the run.
 
+### Target Review — the page triage HUD
+
+Completed agent runs grow a **◈ Review pages** button. It opens a
+full-screen Target Review HUD: a touch-friendly 3D coverflow of every
+crawled source page, styled like a fighter pilot's HUD — the focused page
+is "target locked" with animated corner brackets, surrounded by depth,
+signal, evidence, and tracked-from readouts.
+
+Each card shows the page's seed/crawl depth, title and domain, search
+snippet, newly contributed crawl keywords (`+keyword`), evidence count,
+and the parent domain it was tracked from. The depth ladder on the right
+lights the focused page's crawl depth.
+
+Controls:
+
+- **Swipe** (touch/mouse) or **← / →** — move the lock between targets
+- **KEEP / DROP** buttons (or **K / X**) — triage the locked page;
+  decisions persist per run in localStorage
+- **OPEN** (or **Enter**) — open the locked page's source in a new tab;
+  clicking a side card focuses it instead
+- **Filters** — ALL / TODO / KEPT / DROPPED
+- **CLR** — clear all review decisions for the run
+- **Esc / ✕** — close the HUD
+
 ## DuckDuckGo: the honest version
 
 There is **no official DuckDuckGo search API**. Longview crawls the public
