@@ -375,7 +375,7 @@
   var agentView = "graph";
 
   var STEP_ICON = {
-    plan: "🧭", search: "🔍", read: "📖", reflect: "🤔",
+    plan: "🧭", search: "🔍", read: "📖", reflect: "🤔", crawl: "🕸️",
     followup: "🔁", synthesize: "🧩", done: "✅", error: "❌",
   };
 
@@ -679,6 +679,11 @@
         var statBits = "Completed · " + run.findings + " findings from " +
           run.sources + " sources · " + run.pages_read + " pages read";
         if (run.followups) statBits += " · " + run.followups + " follow-up search" + (run.followups === 1 ? "" : "es");
+        if (run.crawl_depth) {
+          statBits += " · crawled to depth " + run.crawl_depth;
+          var nk = run.new_keywords || [];
+          if (nk.length) statBits += " (" + nk.length + " new keywords: " + nk.slice(0, 6).join(", ") + (nk.length > 6 ? "…" : "") + ")";
+        }
         $("agent-status").textContent = statBits;
         $("agent-report-body").innerHTML = renderReport(run.report_md || "");
         // Sources come from the graph's source nodes (persisted with the run).
@@ -981,7 +986,7 @@
   var chatRunId = null;
   var chatPollTimer = null;
   var chatSeenSeq = 0;
-  var CHAT_ICON = { plan: "🧭", search: "🔍", read: "📖", reflect: "🤔", followup: "🔁", synthesize: "🧩", done: "✅", error: "❌" };
+  var CHAT_ICON = { plan: "🧭", search: "🔍", read: "📖", reflect: "🤔", crawl: "🕸️", followup: "🔁", synthesize: "🧩", done: "✅", error: "❌" };
 
   function chatMsg(role, html) {
     var box = $("chat-msgs");

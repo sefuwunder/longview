@@ -397,8 +397,7 @@ const server = Bun.serve({
             graph: result.graph,
             reportMd: result.report,
             stats: result.stats,
-          });
-        } catch (e) {
+          });        } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           appendAgentStep(db, run.id, { kind: "error", label: msg });
           setAgentStatus(db, run.id, "error", { error: msg });
@@ -437,6 +436,8 @@ const server = Bun.serve({
           sources: run.sources,
           findings: run.findings,
           followups: run.followups,
+          crawl_depth: run.crawl_depth ?? null,
+          new_keywords: run.new_keywords ? JSON.parse(run.new_keywords) : [],
           folder_id: run.folder_id ?? null,
           parent_run_id: run.parent_run_id ?? null,
         },

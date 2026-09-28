@@ -5,8 +5,10 @@
 //   1. PLAN     decompose the question into lines of inquiry (sub-questions)
 //   2. SEARCH   run each line's query variants through the active backend
 //   3. READ     fetch the top pages per line and extract evidence sentences
-//   4. REFLECT  check keyword coverage; weak spots trigger follow-up searches
-//   5. SYNTHESIZE group evidence into findings and build the agent graph
+//   4. CRAWL    deep-crawl from the read pages (up to 8 layers), growing the
+//               keyword set from newly found associated keywords as it goes
+//   5. REFLECT  check keyword coverage; weak spots trigger follow-up searches
+//   6. SYNTHESIZE group evidence into findings and build the agent graph
 //
 // Every phase emits a step, so the UI can narrate the run live instead of
 // showing a bare "working…" spinner. The run's output is the agent graph:
@@ -14,6 +16,12 @@
 // visualizes.
 
 import { search, type SearchOutcome } from "./search";
+import {
+  deepCrawl,
+  type DeepCrawlOptions,
+  type DeepCrawlResult,
+  type DeepSeed,
+} from "./deepcrawl";
 import {
   keywords,
   stem,
@@ -28,6 +36,7 @@ export type AgentStepKind =
   | "plan"
   | "search"
   | "read"
+  | "crawl"
   | "reflect"
   | "followup"
   | "synthesize"
@@ -88,6 +97,12 @@ export interface AgentStats {
   sources: number;
   findings: number;
   followups: number;
+  /** Deep-crawl pages fetched (seeds + discovered). */
+  crawledPages: number;
+  /** Deepest link layer the crawl reached (0 when skipped). */
+  crawlDepth: number;
+  /** Associated keywords the crawl discovered and added to its gating set. */
+  newKeywords: string[];
 }
 
 /** Content-word runs (2+ consecutive significant words) become aspect drills. */
@@ -312,6 +327,20 @@ export interface AgentDeps {
   maxQueriesPerSubq?: number;
   maxPagesPerSubq?: number;
   maxFollowups?: number;
+  /**
+   * Deep-crawl override (tests). Receives the read pages as seeds, the
+   * question, and the max link depth.
+   */
+  deepCrawl?: (
+    seeds: DeepSeed[],
+    query: string,
+    maxDepth: number,
+    opts?: DeepCrawlOptions
+  ) => Promise<DeepCrawlResult>;
+  /** Max link depth for the agent's deep crawl (0 skips the crawl). Default 8. */
+  maxCrawlDepth?: number;
+  /** Max pages the agent's deep crawl may fetch. Default 40. */
+  maxCrawlPages?: number;
   onStep?: (step: Omit<AgentStep, "seq" | "at">) => void;
 }
 
@@ -342,6 +371,18 @@ export async function runAgent(
   const maxQueriesPerSubq = deps.maxQueriesPerSubq ?? 3;
   const maxPagesPerSubq = deps.maxPagesPerSubq ?? 4;
   const maxFollowups = deps.maxFollowups ?? 2;
+  const maxCrawlDepth = deps.maxCrawlDepth ?? 8;
+  const maxCrawlPages = deps.maxCrawlPages ?? 40;
+  const doDeep =
+    deps.deepCrawl ??
+    ((seeds: DeepSeed[], q: string, md: number, opts?: DeepCrawlOptions) =>
+      deepCrawl(seeds, q, {
+        expandKeywords: true,
+        maxPages: maxCrawlPages,
+        maxMs: 3 * 60 * 1000,
+        ...opts,
+        maxDepth: md,
+      }));
 
   const steps: AgentStep[] = [];
   const emit = (kind: AgentStepKind, label: string, detail?: string) => {
@@ -439,7 +480,72 @@ export async function runAgent(
     throw new Error("no pages could be fetched");
   }
 
-  // ---- 4. REFLECT ----
+  // ---- 4. CRAWL ----
+  // Deep-crawl from the read pages, up to maxCrawlDepth link layers. The
+  // crawl grows its own keyword set from newly found associated keywords,
+  // so deeper layers follow terminology the run discovered, not just the
+  // question's words. Discovered pages join the evidence pool below.
+  let crawledPages = 0;
+  let crawlDepth = 0;
+  let newKeywords: string[] = [];
+  if (maxCrawlDepth > 0) {
+    const seeds: DeepSeed[] = pages.map((p) => ({
+      title: p.title,
+      url: p.url,
+      snippet: p.snippet,
+    }));
+    let dc: DeepCrawlResult;
+    try {
+      dc = await doDeep(seeds, question, maxCrawlDepth);
+    } catch {
+      // a dead crawl never kills the run; the read pages still stand
+      dc = {
+        pages: [],
+        pagesCrawled: 0,
+        maxDepthReached: 0,
+        capped: false,
+        capReason: null,
+        newKeywords: [],
+      };
+    }
+    crawledPages = dc.pagesCrawled;
+    crawlDepth = dc.maxDepthReached;
+    newKeywords = dc.newKeywords;
+    // Attribute each discovered page to a line of inquiry by walking its
+    // viaUrl chain back to the seed it grew from.
+    const via = new Map(dc.pages.map((p) => [p.url, p.viaUrl]));
+    const subqOf = (url: string): string => {
+      let cur: string | null = url;
+      const guard = new Set<string>();
+      while (cur && !guard.has(cur)) {
+        guard.add(cur);
+        const sq = foundVia.get(cur);
+        if (sq) return sq;
+        cur = via.get(cur) ?? null;
+      }
+      return "q0";
+    };
+    let added = 0;
+    for (const p of dc.pages) {
+      if (p.depth === 0 || readUrls.has(p.url)) continue;
+      readUrls.add(p.url);
+      if (!seen.has(p.url)) {
+        seen.set(p.url, { title: p.title, url: p.url, snippet: p.snippet });
+      }
+      foundVia.set(p.url, subqOf(p.url));
+      pages.push({ url: p.url, title: p.title, snippet: p.snippet, text: p.text });
+      added++;
+    }
+    emit(
+      "crawl",
+      `Deep crawl to depth ${crawlDepth}: ${crawledPages} page${crawledPages === 1 ? "" : "s"}, ${added} new`,
+      newKeywords.length > 0
+        ? `new associated keywords: ${newKeywords.slice(0, 8).join(", ")}${newKeywords.length > 8 ? "…" : ""}`
+        : "no new associated keywords surfaced"
+    );
+  }
+
+  // ---- 5. REFLECT ----
   let evidence = scoreEvidence(pages, question);
   const weak = reflectCoverage(question, evidence);
   let followups = 0;
@@ -486,7 +592,7 @@ export async function runAgent(
     );
   }
 
-  // ---- 5. SYNTHESIZE ----
+  // ---- 6. SYNTHESIZE ----
   const findings = groupFindings(evidence);
   const sources = pages.map((p) => ({
     title: p.title,
@@ -497,6 +603,11 @@ export async function runAgent(
   const note =
     `Agent run: ${plan.length} lines of inquiry, ${pages.length} pages read, ` +
     `${sources.length} sources, ${findings.length} findings` +
+    (crawledPages > 0
+      ? `, deep crawl to depth ${crawlDepth} (${crawledPages} pages` +
+        (newKeywords.length > 0 ? `, ${newKeywords.length} new keywords` : "") +
+        ")"
+      : "") +
     (followups > 0 ? `, ${followups} follow-up search${followups === 1 ? "" : "es"} after the coverage check` : "") +
     ".";
   const report = buildReport(
@@ -511,6 +622,9 @@ export async function runAgent(
     sources: sources.length,
     findings: findings.length,
     followups,
+    crawledPages,
+    crawlDepth,
+    newKeywords,
   };
   emit(
     "synthesize",

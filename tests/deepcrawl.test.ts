@@ -6,6 +6,7 @@ import {
   normalizeUrl,
   extractLinks,
   linkScore,
+  associatedKeywords,
 } from "../src/deepcrawl";
 import { keywords } from "../src/research";
 
@@ -59,6 +60,17 @@ const stub: Record<string, string> = {
     "dupe filler"
   ),
   "/target": html("Target", "", "the tidal target page content"),
+  "/kw-seed": html(
+    "KW Seed",
+    a("/kw-mid", "tidal energy overview"),
+    "seed filler"
+  ),
+  "/kw-mid": html(
+    "KW Mid",
+    a("/kw-deep", "photovoltaic cell efficiency guide"),
+    "photovoltaic ".repeat(10) + "mid page filler about tidal energy"
+  ),
+  "/kw-deep": html("KW Deep", "", "photovoltaic deep page content"),
   ...chain,
 };
 
@@ -226,5 +238,84 @@ describe("deepCrawl", () => {
       noDelay: true,
     });
     expect(r.pagesCrawled).toBe(1); // hub only
+  });
+});
+
+describe("associatedKeywords", () => {
+  test("returns frequent new content-word stems, excluding the gating set", () => {
+    const kw = new Set(["tidal", "energy"]);
+    const text = "photovoltaic ".repeat(10) + "tidal energy " + "mid page filler about";
+    expect(associatedKeywords(text, kw, 3)).toEqual(["photovoltaic"]);
+  });
+
+  test("requires 3+ occurrences and drops stopwords", () => {
+    const kw = new Set<string>();
+    expect(associatedKeywords("solar solar wind", kw, 3)).toEqual([]);
+    expect(associatedKeywords("the the the and and and", kw, 3)).toEqual([]);
+  });
+
+  test("frequency-ranked, ties alphabetical, honors limit", () => {
+    const kw = new Set<string>();
+    const text = "alpha ".repeat(5) + "beta ".repeat(5) + "gamma ".repeat(4);
+    expect(associatedKeywords(text, kw, 10)).toEqual(["alpha", "beta", "gamma"]);
+    expect(associatedKeywords(text, kw, 2)).toEqual(["alpha", "beta"]);
+  });
+
+  test("deterministic", () => {
+    const kw = new Set(["tidal"]);
+    const text = "photovoltaic ".repeat(6) + "inverter ".repeat(4);
+    expect(associatedKeywords(text, kw, 5)).toEqual(
+      associatedKeywords(text, kw, 5)
+    );
+  });
+});
+
+describe("deepCrawl keyword expansion", () => {
+  test("off by default: new keywords are not found and gated links are pruned", async () => {
+    const r = await deepCrawl([seed("/kw-seed")], "tidal energy", {
+      maxDepth: 2,
+      noDelay: true,
+    });
+    expect(r.newKeywords).toEqual([]);
+    expect(fetched).toContain("/kw-mid");
+    // "photovoltaic cell efficiency guide" shares no keyword with "tidal energy"
+    expect(fetched).not.toContain("/kw-deep");
+  });
+
+  test("on: discovers associated keywords and follows links they unlock", async () => {
+    const r = await deepCrawl([seed("/kw-seed")], "tidal energy", {
+      maxDepth: 2,
+      expandKeywords: true,
+      noDelay: true,
+    });
+    expect(r.newKeywords).toContain("photovoltaic");
+    expect(fetched).toContain("/kw-mid");
+    expect(fetched).toContain("/kw-deep");
+    const deep = r.pages.find((p) => p.url === BASE + "/kw-deep")!;
+    expect(deep.depth).toBe(2);
+    expect(deep.viaUrl).toBe(BASE + "/kw-mid");
+  });
+
+  test("maxNewKeywords caps growth", async () => {
+    const r = await deepCrawl([seed("/kw-seed")], "tidal energy", {
+      maxDepth: 2,
+      expandKeywords: true,
+      maxNewKeywords: 0,
+      noDelay: true,
+    });
+    expect(r.newKeywords).toEqual([]);
+    expect(fetched).not.toContain("/kw-deep");
+  });
+
+  test("deterministic across runs", async () => {
+    const opts = {
+      maxDepth: 2,
+      expandKeywords: true,
+      noDelay: true,
+    } as const;
+    const a = await deepCrawl([seed("/kw-seed")], "tidal energy", opts);
+    const b = await deepCrawl([seed("/kw-seed")], "tidal energy", opts);
+    expect(a.newKeywords).toEqual(b.newKeywords);
+    expect(a.pages.map((p) => p.url)).toEqual(b.pages.map((p) => p.url));
   });
 });

@@ -12,6 +12,11 @@ import {
   runAgent,
 } from "../src/agent";
 import type { SearchOutcome } from "../src/search";
+import type {
+  DeepCrawlOptions,
+  DeepCrawlResult,
+  DeepSeed,
+} from "../src/deepcrawl";
 
 const Q = "how do solar panels work";
 
@@ -189,29 +194,145 @@ describe("runAgent (stubbed)", () => {
   const fetchPage = async (url: string) =>
     PAGES.find((p) => p.url === url)?.text ?? "";
 
-  test("full loop emits plan→search→read→reflect→synthesize→done", async () => {
+  test("full loop emits plan→search→read→crawl→reflect→synthesize→done", async () => {
     const kinds: string[] = [];
+    const seenCalls: { seeds: number; maxDepth: number }[] = [];
+    const deepCrawl = async (
+      seeds: DeepSeed[],
+      _q: string,
+      maxDepth: number,
+      _o?: DeepCrawlOptions
+    ): Promise<DeepCrawlResult> => {
+      seenCalls.push({ seeds: seeds.length, maxDepth });
+      return {
+        pages: seeds.map((s) => ({
+          title: s.title,
+          url: s.url,
+          snippet: s.snippet,
+          depth: 0,
+          viaUrl: null,
+          text: "seed text",
+        })),
+        pagesCrawled: seeds.length,
+        maxDepthReached: 0,
+        capped: false,
+        capReason: null,
+        newKeywords: ["photovoltaic"],
+      };
+    };
     const r = await runAgent(Q, {
       crawl: stubCrawl(urls),
       fetchPage,
+      deepCrawl,
       onStep: (s) => kinds.push(s.kind),
     });
     expect(kinds[0]).toBe("plan");
     expect(kinds).toContain("search");
     expect(kinds).toContain("read");
+    expect(kinds).toContain("crawl");
     expect(kinds).toContain("reflect");
     expect(kinds).toContain("synthesize");
     expect(kinds[kinds.length - 1]).toBe("done");
+    // crawl runs after read and before reflect
+    expect(kinds.indexOf("crawl")).toBeGreaterThan(kinds.indexOf("read"));
+    expect(kinds.indexOf("crawl")).toBeLessThan(kinds.indexOf("reflect"));
+    // agent runs deep-crawl up to depth 8, seeded from the read pages
+    expect(seenCalls).toEqual([{ seeds: urls.length, maxDepth: 8 }]);
     expect(r.findings.length).toBeGreaterThan(0);
     expect(r.sources.length).toBe(urls.length);
     expect(r.graph.nodes.length).toBeGreaterThan(0);
     expect(r.report).toContain("# how do solar panels work");
     expect(r.stats.pagesRead).toBe(urls.length);
+    expect(r.stats.crawledPages).toBe(urls.length);
+    expect(r.stats.crawlDepth).toBe(0);
+    expect(r.stats.newKeywords).toEqual(["photovoltaic"]);
     // "work" appears in a single evidence sentence (< 2 hits) → the agent
     // correctly fires one follow-up; the stub returns no new URLs for it.
     expect(r.stats.followups).toBe(1);
     expect(kinds).toContain("followup");
     expect(r.steps.length).toBe(kinds.length);
+  });
+
+  test("crawl discoveries join the evidence pool with subq attribution", async () => {
+    const deepCrawl = async (
+      seeds: DeepSeed[]
+    ): Promise<DeepCrawlResult> => ({
+      pages: [
+        ...seeds.map((s) => ({
+          title: s.title,
+          url: s.url,
+          snippet: s.snippet,
+          depth: 0,
+          viaUrl: null as string | null,
+          text: "seed text",
+        })),
+        {
+          title: "Deep find",
+          url: "https://ex.com/deep",
+          snippet: "",
+          depth: 2,
+          viaUrl: seeds[0].url,
+          text: PAGES[0].text,
+        },
+      ],
+      pagesCrawled: seeds.length + 1,
+      maxDepthReached: 2,
+      capped: false,
+      capReason: null,
+      newKeywords: ["inverter"],
+    });
+    const kinds: string[] = [];
+    const r = await runAgent(Q, {
+      crawl: stubCrawl(urls),
+      fetchPage,
+      deepCrawl,
+      onStep: (s) => kinds.push(s.kind),
+    });
+    expect(r.stats.crawlDepth).toBe(2);
+    expect(r.stats.crawledPages).toBe(urls.length + 1);
+    expect(r.stats.newKeywords).toEqual(["inverter"]);
+    // the discovered page becomes a source and lands in the report note
+    expect(r.sources.some((s) => s.url === "https://ex.com/deep")).toBe(true);
+    expect(r.report).toContain("deep crawl to depth 2");
+    // the graph wires the discovered source under the seed's line of inquiry
+    const pid = r.graph.nodes.find(
+      (n) => n.kind === "source" && n.url === "https://ex.com/deep"
+    )!.id;
+    const edge = r.graph.edges.find((e) => e.to === pid);
+    expect(edge).toBeDefined();
+    const from = r.graph.nodes.find((n) => n.id === edge!.from)!;
+    expect(from.kind).toBe("subq");
+    expect(kinds).toContain("crawl");
+  });
+
+  test("maxCrawlDepth: 0 skips the crawl phase", async () => {
+    const kinds: string[] = [];
+    const r = await runAgent(Q, {
+      crawl: stubCrawl(urls),
+      fetchPage,
+      maxCrawlDepth: 0,
+      onStep: (s) => kinds.push(s.kind),
+    });
+    expect(kinds).not.toContain("crawl");
+    expect(r.stats.crawledPages).toBe(0);
+    expect(r.stats.crawlDepth).toBe(0);
+    expect(r.stats.newKeywords).toEqual([]);
+    expect(kinds[kinds.length - 1]).toBe("done");
+  });
+
+  test("a dead deep crawl never kills the run", async () => {
+    const kinds: string[] = [];
+    const r = await runAgent(Q, {
+      crawl: stubCrawl(urls),
+      fetchPage,
+      deepCrawl: async () => {
+        throw new Error("crawl exploded");
+      },
+      onStep: (s) => kinds.push(s.kind),
+    });
+    expect(kinds).toContain("crawl");
+    expect(r.stats.crawledPages).toBe(0);
+    expect(r.findings.length).toBeGreaterThan(0);
   });
 
   test("weak coverage triggers follow-up searches", async () => {
@@ -242,6 +363,7 @@ describe("runAgent (stubbed)", () => {
     const r = await runAgent(Q, {
       crawl,
       fetchPage: async (u) => thin[u] ?? "",
+      maxCrawlDepth: 0,
       onStep: (s) => kinds.push(s.kind),
     });
     expect(kinds).toContain("followup");
@@ -280,7 +402,11 @@ describe("runAgent (stubbed)", () => {
       if (u === urls[0]) throw new Error("dead page");
       return fetchPage(u);
     };
-    const r = await runAgent(Q, { crawl: flaky, fetchPage: flakyFetch });
+    const r = await runAgent(Q, {
+      crawl: flaky,
+      fetchPage: flakyFetch,
+      maxCrawlDepth: 0,
+    });
     expect(r.stats.pagesRead).toBe(1);
     expect(r.findings.length).toBeGreaterThan(0);
   });

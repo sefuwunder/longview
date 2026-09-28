@@ -10,7 +10,7 @@
 // visited-set dedupe with URL normalization, per-domain >=2s politeness,
 // non-HTML skip, 2MB body cap. All dependency-free.
 
-import { keywords, stem, htmlToText } from "./research";
+import { keywords, stem, htmlToText, STOPWORDS } from "./research";
 
 export interface DeepSeed {
   title: string;
@@ -37,6 +37,9 @@ export interface DeepCrawlResult {
   maxDepthReached: number;
   capped: boolean;
   capReason: "page_cap" | "time_cap" | null;
+  /** Associated keywords discovered in crawled pages and added to the
+   *  gating set (empty unless expandKeywords was on). */
+  newKeywords: string[];
 }
 
 export interface DeepCrawlOptions {
@@ -58,6 +61,17 @@ export interface DeepCrawlOptions {
   noDelay?: boolean;
   /** Overrideable page fetcher (tests). */
   fetchHtml?: (url: string) => Promise<string>;
+  /**
+   * Grow the gating keyword set from the crawl itself: after each page is
+   * fetched, its most frequent new content-word stems join the set, so
+   * deeper layers follow freshly discovered associated terminology instead
+   * of only the original query's keywords. Default false.
+   */
+  expandKeywords?: boolean;
+  /** Cap on keywords added via expansion. Default 24. */
+  maxNewKeywords?: number;
+  /** Max new keywords contributed per page. Default 3. */
+  keywordsPerPage?: number;
 }
 
 const UA =
@@ -165,6 +179,32 @@ export function linkScore(
   return hits;
 }
 
+/**
+ * Newly found associated keywords in a page's text: the most frequent
+ * content-word stems that are NOT already in the gating set. A candidate
+ * must appear at least 3 times (so one stray mention can't steer the
+ * crawl) and the winners are frequency-ranked, ties broken alphabetically.
+ * Deterministic.
+ */
+export function associatedKeywords(
+  text: string,
+  kw: Set<string>,
+  limit: number
+): string[] {
+  const freq = new Map<string, number>();
+  for (const w of text.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)) {
+    if (w.length < 3 || STOPWORDS.has(w)) continue;
+    const s = stem(w);
+    if (s.length < 3 || kw.has(s)) continue;
+    freq.set(s, (freq.get(s) ?? 0) + 1);
+  }
+  return [...freq.entries()]
+    .filter(([, n]) => n >= 3)
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .slice(0, Math.max(0, limit))
+    .map(([s]) => s);
+}
+
 /** Fetch a page's HTML, skipping non-HTML and capping the body. Throws on failure. */
 export async function fetchHtmlDefault(
   url: string,
@@ -234,11 +274,15 @@ export async function deepCrawl(
     timeoutMs: 10000,
     maxBytes: 2_000_000,
     noDelay: process.env.DEEP_NO_DELAY === "1",
+    expandKeywords: false,
+    maxNewKeywords: 24,
+    keywordsPerPage: 3,
     ...opts,
   };
   const fetchHtml =
     o.fetchHtml ?? ((url: string) => fetchHtmlDefault(url, o.timeoutMs, o.maxBytes));
   const kw = new Set(keywords(query));
+  const newKeywords: string[] = [];
   const visited = new Set<string>();
   const lastFetch = new Map<string, number>();
   const t0 = Date.now();
@@ -309,6 +353,15 @@ export async function deepCrawl(
       viaUrl: job.viaUrl,
       text,
     });
+    // Grow the gating set from what the crawl itself discovers: newly found
+    // associated keywords steer the link scoring of all deeper layers.
+    if (o.expandKeywords) {
+      for (const k of associatedKeywords(text, kw, o.keywordsPerPage)) {
+        if (newKeywords.length >= o.maxNewKeywords) break;
+        kw.add(k);
+        newKeywords.push(k);
+      }
+    }
     if (job.depth >= o.maxDepth) continue;
     const scored: { link: RawLink; norm: string; score: number }[] = [];
     for (const link of extractLinks(html, job.url)) {
@@ -323,5 +376,5 @@ export async function deepCrawl(
     }
   }
 
-  return { pages, pagesCrawled, maxDepthReached, capped, capReason };
+  return { pages, pagesCrawled, maxDepthReached, capped, capReason, newKeywords };
 }

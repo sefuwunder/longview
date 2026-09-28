@@ -64,6 +64,8 @@ export interface AgentRun {
   sources: number | null;
   findings: number | null;
   followups: number | null;
+  crawl_depth: number | null;
+  new_keywords: string | null; // JSON string[] of discovered associated keywords
   folder_id: number | null; // NULL = Unfiled
   parent_run_id: number | null; // NULL = root run; set for follow-up runs
 }
@@ -161,7 +163,9 @@ export function openDb(dataDir?: string): Database {
       pages_read INTEGER,
       sources INTEGER,
       findings INTEGER,
-      followups INTEGER NOT NULL DEFAULT 0
+      followups INTEGER NOT NULL DEFAULT 0,
+      crawl_depth INTEGER,
+      new_keywords TEXT
     );
     CREATE TABLE IF NOT EXISTS folders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,6 +202,8 @@ export function openDb(dataDir?: string): Database {
   addCol("topics", "last_error_class TEXT");
   addCol("topics", "depth INTEGER NOT NULL DEFAULT 3");
   addCol("findings", "depth INTEGER NOT NULL DEFAULT 0");
+  addCol("agent_runs", "crawl_depth INTEGER");
+  addCol("agent_runs", "new_keywords TEXT");
   addCol("findings", "via_url TEXT");
   addCol("research_runs", "pages_crawled INTEGER");
   addCol("research_runs", "max_depth INTEGER");
@@ -438,7 +444,7 @@ export function getAgentRun(db: Database, id: number): AgentRun | null {
 export function listAgentRuns(db: Database): AgentRun[] {
   return db
     .query(
-      "SELECT id, question, status, created_at, pages_read, sources, findings, followups, folder_id, parent_run_id FROM agent_runs ORDER BY id DESC LIMIT 50"
+      "SELECT id, question, status, created_at, pages_read, sources, findings, followups, crawl_depth, new_keywords, folder_id, parent_run_id FROM agent_runs ORDER BY id DESC LIMIT 50"
     )
     .all() as AgentRun[];
 }
@@ -456,6 +462,8 @@ export interface AgentRunStats {
   sources: number;
   findings: number;
   followups: number;
+  crawlDepth?: number | null;
+  newKeywords?: string[] | null;
 }
 
 /** Persist one emitted step by appending it to the run's steps_json. */
@@ -492,7 +500,7 @@ export function setAgentStatus(
   } = {}
 ): void {
   db.query(
-    "UPDATE agent_runs SET status=?, plan_json=COALESCE(?, plan_json), graph_json=COALESCE(?, graph_json), report_md=COALESCE(?, report_md), error=?, pages_read=?, sources=?, findings=?, followups=? WHERE id=?"
+    "UPDATE agent_runs SET status=?, plan_json=COALESCE(?, plan_json), graph_json=COALESCE(?, graph_json), report_md=COALESCE(?, report_md), error=?, pages_read=?, sources=?, findings=?, followups=?, crawl_depth=?, new_keywords=? WHERE id=?"
   ).run(
     status,
     opts.plan !== undefined ? JSON.stringify(opts.plan) : null,
@@ -503,6 +511,8 @@ export function setAgentStatus(
     opts.stats?.sources ?? null,
     opts.stats?.findings ?? null,
     opts.stats?.followups ?? 0,
+    opts.stats?.crawlDepth ?? null,
+    opts.stats?.newKeywords ? JSON.stringify(opts.stats.newKeywords) : null,
     id
   );
 }

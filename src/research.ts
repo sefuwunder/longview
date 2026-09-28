@@ -17,6 +17,9 @@ const STOP = new Set(
   )
 );
 
+/** Stopwords, shared with the deep crawler's associated-keyword extraction. */
+export const STOPWORDS = STOP;
+
 /** Light stemmer so "charging"/"charge" and "batteries"/"battery" match. */
 export function stem(w: string): string {
   if (w.length > 5 && w.endsWith("ing")) return w.slice(0, -3);
